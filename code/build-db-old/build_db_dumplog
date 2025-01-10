@@ -1,0 +1,15 @@
+versioninfo completed
+sqlite connection is closed
+python3 build_db_VersionInfo.py  1046.34s user 640.82s system 50% cpu 55:43.20 total
+
+If mysql hangs while creating table, restart pc (should be okay with only restarting mysql, but donno how to do that on my mac)
+Delete mysqlId instance from activity monitor, Settings->MySQL-> Start the service
+
+
+
+## Create a DB in postgres-named "ICSE_SEIP" before running it, 
+engine = create_engine('postgresql+psycopg2://postgres:admin123@localhost:5432/ICSE_SEIP')  ## Add password and DB name
+con=engine.connect()
+df2.to_sql('pypi_downloads', con, if_exists='append', index=False)
+print('Done')
+con.close()

@@ -1,0 +1,19 @@
+dump
+# npm.csv
+# PyPI.csv
+# .gitignore
+osv-data/.DS_Store
+__pycache__/
+.DS_Store
+popularity_matrix_calc/.env
+*/.DS_Store
+secmet_venv/*
+.vscode
+*.log
+*.csv
+*.html
+*.pkl
+
+# File limit exceeded
+/data/for-visualization/ttu*
+/data/cargo-raw-pkgver/*
