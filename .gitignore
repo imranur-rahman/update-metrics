@@ -17,3 +17,4 @@ secmet_venv/*
 # File limit exceeded
 /data/for-visualization/ttu*
 /data/cargo-raw-pkgver/*
+api_keys.txt
