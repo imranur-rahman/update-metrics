@@ -31,6 +31,7 @@ google-crc32c
 google-resumable-media
 googleapis-common-protos
 idna
+imbalanced-learn
 importlib-metadata
 importlib-resources
 ipykernel
