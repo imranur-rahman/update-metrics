@@ -27,3 +27,12 @@ lead(V1.release_date, 1) over (
 ) as next_version_release_date
 from versioninfo V1;
 -- columns: 53234376
+
+
+\copy (
+	SELECT system_name, package_name, COUNT(version_name) as version_count
+	FROM versioninfo
+	GROUP BY system_name, package_name
+	ORDER BY system_name, package_name
+) TO '/home/imranur/security-metrics/data/version_counts.csv' WITH CSV HEADER;
+-- COPY 4090125
