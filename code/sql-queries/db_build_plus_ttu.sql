@@ -77,7 +77,7 @@ from versioninfo V1;
 --DROP INDEX versioninfo_extended_index;
 -- indexing for faster data retrieval
 CREATE INDEX versioninfo_extended_index
-ON versioninfo_extended (system_name, package_name, version_name);
+ON versioninfo_extended (system_name, package_name, version_name, release_date);
 
 CREATE INDEX versioninfo_backup_index
 ON versioninfo_backup (system_name, package_name, version_name);
