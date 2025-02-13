@@ -501,3 +501,58 @@ ORDER BY
 
 
 `\copy (select * from aggregated_dependency_status) to '/home/imranur/security-metrics/data/dep_status/dep_status.csv' with header delimiter as ','`
+
+
+-- Find the number of time a package updates its pinned dependencies
+CREATE TABLE pinned_dependency_updates AS
+WITH distinct_pinned_deps AS (
+    SELECT DISTINCT
+        system_name,
+        from_package_name,
+        from_version,
+        to_package_name,
+        actual_requirement
+    FROM relations_minified
+    WHERE 
+        -- Only consider pinned versions
+        ltrim(actual_requirement) !~ '^[*<>^~!x]'
+        AND actual_requirement IS NOT NULL
+        AND is_regular = true
+    ORDER BY 
+        system_name,
+        from_package_name,
+        to_package_name,
+        from_version,
+        actual_requirement
+),
+version_changes AS (
+    SELECT 
+        system_name,
+        from_package_name,
+        to_package_name,
+        from_version,
+        actual_requirement,
+        CASE 
+            WHEN LAG(actual_requirement) OVER (
+                PARTITION BY system_name, from_package_name, to_package_name 
+                ORDER BY from_version
+            ) != actual_requirement THEN 1
+            ELSE 0
+        END as version_changed
+    FROM distinct_pinned_deps
+)
+SELECT 
+    system_name,
+    from_package_name,
+    to_package_name,
+    SUM(version_changed) as requirement_changes
+FROM version_changes
+GROUP BY 
+    system_name,
+    from_package_name,
+    to_package_name
+HAVING SUM(version_changed) > 0
+ORDER BY requirement_changes DESC;
+-- SELECT 134390
+
+`\copy (select * from pinned_dependency_updates) to '/home/imranur/security-metrics/data/dep_status/pinned_dependency_updates.csv' with header delimiter as ','`
