@@ -108,7 +108,7 @@ ON relations_minified (system_name,
 -- alter table relations drop column is_exposed;
 alter table relations_minified add column is_exposed boolean default false;
 
--- Update the rows only having is_exposed = true
+-- Update the rows for is_exposed = true
 UPDATE relations_minified r
 SET is_exposed = true
 FROM osv_extended o
