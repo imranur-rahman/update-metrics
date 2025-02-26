@@ -732,29 +732,11 @@ BEGIN
         RETURN 'floating - major';
     END IF;
     
-    -- Add check for invalid characters in tilde and caret patterns
     IF spec LIKE '~%' THEN
-        -- Check for any invalid characters:
-        -- [<>=|\s] matches:
-        -- < less than
-        -- > greater than
-        -- = equals
-        -- | pipe character
-        -- \s any whitespace character
-        -- Return 'other' if any of these characters are found
-        IF spec ~ '[<>=|\s]' THEN
-            RETURN 'other';
-        END IF;
         RETURN 'floating - patch';
     END IF;
-
+    
     IF spec LIKE '^%' THEN
-        -- Same validation as above for caret patterns
-        -- Ensures version specs like '^1.2.3' are valid
-        -- But '^1.2.3 >2.0.0' or '^1.2.3|2.0.0' are marked as 'other'
-        IF spec ~ '[<>=|\s]' THEN
-            RETURN 'other';
-        END IF;
         RETURN 'floating - minor';
     END IF;
 
@@ -845,6 +827,8 @@ SELECT get_spec_type('npm:eslint-plugin-i@2.27.5-4'); -- "other"
 -- Example usage:
 COMMENT ON FUNCTION get_spec_type(text) IS 'Determines the type of version specification (pinned, floating patch/minor/major)';
 
+
+-- 
 
 
 WITH highest AS (
@@ -1183,7 +1167,7 @@ WHERE prev_is_out_of_date IS NOT NULL;
 
 -- dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    string_agg                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
 -- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---                     10409 |                                                  81 |                                                5218858 |                                                     70761 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major - restrictive -> pinned, floating - major -> floating - ma- restrictive -> pinned,r - restri- major -> floating ctive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - major - restrictive, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
+--                     10409 |                                                  81 |                                                5218858 |                                                     70761 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major - restrictive -> pinned, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - major - restrictive, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
 
 
 WITH version_transitions AS (
@@ -1547,5 +1531,5 @@ ORDER BY
 --  pinned -> other                                    |                5
 --  floating - major - restrictive -> floating - patch |                4
 --  floating - major -> other                          |                3
---  floating - major -> floating - major - restrictive |
+--  floating - major -> floating - major - restrictive |                1
 
