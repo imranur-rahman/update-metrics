@@ -29,10 +29,15 @@ from versioninfo V1;
 -- columns: 53234376
 
 
+-- ERROR:  bad semver value '1.0.20230603010803': version number exceeds 31-bit range
+
 \copy (
-	SELECT system_name, package_name, COUNT(version_name) as version_count
+	SELECT system_name, package_name, 
+		   COUNT(version_name) as version_count,
+		   DATE_PART('day', MAX(release_date) - MIN(release_date)) as package_age_days,
+		   COUNT(DISTINCT CASE WHEN is_semver(version_name) THEN get_semver_major(to_semver(version_name)) END) as major_version_count
 	FROM versioninfo
 	GROUP BY system_name, package_name
 	ORDER BY system_name, package_name
-) TO '/home/imranur/security-metrics/data/version_counts.csv' WITH CSV HEADER;
+) TO '/home/imranur/security-metrics/data/versions_major_versions_age.csv' WITH CSV HEADER;
 -- COPY 4090125
