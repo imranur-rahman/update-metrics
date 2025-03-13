@@ -85,3 +85,4 @@ List of relations
 ```
 - Run `4.time_to_update.sql` and `5.time_to_remediate.sql`.
 - Export the tables using `\copy (select * from mean_time_to_update_maintained) to '/home/imranur/security-metrics/data/mttu/mttu.csv' with header delimiter as ','` (count: 163207) and `\copy (select * from mean_time_to_remediate_maintained) to '/home/imranur/security-metrics/data/mttr/mttr.csv' with header delimiter as ','` (count: 22513).
+- Result should be in the `/results/` directory structured into subdirectories.

@@ -75,9 +75,7 @@ FROM
 	FROM relations
 ) as ttt
 GROUP BY ttt.system_name;
--- "PYPI"	1230331
--- "NPM"	24987760
--- "CARGO"	673211
+
 
 
 
@@ -89,6 +87,21 @@ FROM
 	FROM relations
 ) as ttt
 GROUP BY ttt.system_name;
--- "CARGO"	90333
--- "NPM"	1807730
--- "PYPI"	202742
+--  system_name |  count  
+-- -------------+---------
+--  CARGO       |  122069
+--  NPM         | 2603314
+--  PYPI        |  274720
+
+SELECT ttt.system_name, COUNT(*)
+FROM
+(
+	SELECT DISTINCT system_name, from_package_name
+	FROM relations_minified
+) as ttt
+GROUP BY ttt.system_name;
+--  system_name | count  
+-- -------------+--------
+--  CARGO       |  15321
+--  NPM         | 141551
+--  PYPI        |  44199
