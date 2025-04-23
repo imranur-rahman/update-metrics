@@ -43,3 +43,8 @@ COPY mean_time_to_remediate_maintained TO
 
 `\copy (select * from mean_time_to_update_maintained) to '/home/imranur/security-metrics/data/mttu/mttu.csv' with header delimiter as ','` (count: 163207) and
 `\copy (select * from mean_time_to_remediate_maintained) to '/home/imranur/security-metrics/data/mttr/mttr.csv' with header delimiter as ','` (count: 22513)
+
+COPY relations_minified_versioning TO 
+'/home/imranur/security-metrics/data/relationships/relations_minified_versioning.csv' DELIMITER ',' CSV HEADER;
+
+`\copy (select dependency_id, interval_start_days, interval_end_days, requirement_type, is_out_of_date, is_exposed from relations_minified_versioning) to '/home/imranur/security-metrics/data/relationships/relations_minified_versioning.csv' with header delimiter as ','` (count: 1651064)
