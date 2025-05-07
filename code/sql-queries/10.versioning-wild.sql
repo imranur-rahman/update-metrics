@@ -14,6 +14,11 @@ SET requirement_type = CASE
     ELSE 'other'
 END;
 
+UPDATE relations_minified
+SET requirement_type = 'NULL'
+WHERE actual_requirement IS NULL;
+-- UPDATE 8000645
+
 CREATE INDEX relations_minified_index_4
 ON relations_minified (requirement_type);
 
@@ -29,7 +34,7 @@ WITH FirstRequirementInGroup AS (
         ROW_NUMBER() OVER(PARTITION BY system_name, from_package_name, from_version, to_package_name ORDER BY (SELECT NULL)) as rn
     FROM relations_minified
     WHERE is_regular = TRUE
-        -- AND actual_requirement IS NOT NULL -- commenting this out to count this with 'other' types
+        AND actual_requirement IS NOT NULL
 )
 SELECT
     system_name,
@@ -38,10 +43,9 @@ SELECT
 FROM FirstRequirementInGroup
 WHERE rn = 1 -- Filter to get only one row per group
 GROUP BY system_name, requirement_type
-ORDER BY system_name, usage_count DESC; -- Order by count descending
--- expected output:
+ORDER BY system_name;
 -- system_name | requirement_type | usage_count
--------------+--------------------------------+-------------
+-- -----------+--------------------------------+-------------
 --  NPM         | floating - minor               |    34148964
 --  NPM         | pinned                         |    15380764
 --  PYPI        | other                          |     3634636
@@ -78,7 +82,7 @@ WITH categorized_requirements AS (
         relations_minified
     WHERE 
         is_regular = true
-        -- AND is_out_of_date = true
+        AND actual_requirement IS NOT NULL
 )
 SELECT 
     system_name,
@@ -94,7 +98,7 @@ GROUP BY
     system_name, requirement_type
 ORDER BY
     system_name, requirement_type;
---  system_name |        requirement_type        | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count 
+-- system_name |        requirement_type        | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count 
 -- -------------+--------------------------------+-------------+-----------------------------+----------------------+------------------
 --  CARGO       | floating - major               |         200 |                         106 |                   17 |               17
 --  CARGO       | floating - major - restrictive |         150 |                          98 |                    8 |                8
@@ -112,9 +116,10 @@ ORDER BY
 --  PYPI        | floating - major - restrictive |      113305 |                       57039 |                 4199 |             2790
 --  PYPI        | floating - minor               |     1960065 |                      920345 |                33501 |             9924
 --  PYPI        | floating - patch               |      832580 |                      432192 |                22108 |             7737
---  PYPI        | other                          |     7458672 |                     3636990 |               162422 |            33864
+--  PYPI        | other                          |     2682283 |                     1497272 |                59339 |            13492
 --  PYPI        | pinned                         |        6220 |                        2868 |                  317 |              138
 -- (18 rows)
+
 
 
 WITH dependency_stats AS (
@@ -127,6 +132,7 @@ WITH dependency_stats AS (
         relations_minified
     WHERE 
         is_regular = true
+        AND actual_requirement IS NOT NULL
 )
 SELECT 
     system_name,
@@ -150,6 +156,6 @@ ORDER BY
 --  system_name | total_count | unique_pkg_version_deps | unique_pkg_deps | unique_packages | avg_deps_per_package 
 -- -------------+-------------+-------------------------+-----------------+-----------------+----------------------
 --  NPM         |    78973210 |                51101005 |          741250 |          118035 |                 6.28
---  PYPI        |    13637448 |                 6509459 |          242735 |           42875 |                 5.66
+--  PYPI        |     8861059 |                 4372844 |          155574 |           31135 |                 5.00
 --  CARGO       |      197703 |                  104817 |            6854 |            3323 |                 2.06
 -- (3 rows)
