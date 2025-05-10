@@ -44,26 +44,26 @@ FROM FirstRequirementInGroup
 WHERE rn = 1 -- Filter to get only one row per group
 GROUP BY system_name, requirement_type
 ORDER BY system_name;
--- system_name | requirement_type | usage_count
--- -----------+--------------------------------+-------------
---  NPM         | floating - minor               |    34148964
---  NPM         | pinned                         |    15380764
---  PYPI        | other                          |     3634636
---  PYPI        | floating - major               |     1463542
---  NPM         | floating - patch               |     1094980
---  PYPI        | floating - minor               |      919860
---  PYPI        | floating - patch               |      431643
---  NPM         | floating - major               |      389961
---  CARGO       | floating - minor               |       99970
---  NPM         | other                          |       84392
---  PYPI        | floating - major - restrictive |       56913
---  CARGO       | other                          |        3182
---  PYPI        | pinned                         |        2865
---  NPM         | floating - major - restrictive |        1944
---  CARGO       | floating - patch               |        1335
---  CARGO       | pinned                         |         126
+-- system_name |        requirement_type        | usage_count 
+-- -------------+--------------------------------+-------------
 --  CARGO       | floating - major               |         106
 --  CARGO       | floating - major - restrictive |          98
+--  CARGO       | floating - minor               |       99970
+--  CARGO       | floating - patch               |        1335
+--  CARGO       | other                          |        3182
+--  CARGO       | pinned                         |         126
+--  NPM         | floating - major               |      389961
+--  NPM         | floating - major - restrictive |        1944
+--  NPM         | floating - minor               |    34148963
+--  NPM         | floating - patch               |     1094980
+--  NPM         | other                          |       84392
+--  NPM         | pinned                         |    15380765
+--  PYPI        | floating - major               |     1465062
+--  PYPI        | floating - major - restrictive |       56926
+--  PYPI        | floating - minor               |      919946
+--  PYPI        | floating - patch               |      431793
+--  PYPI        | other                          |     1496250
+--  PYPI        | pinned                         |        2867
 -- (18 rows)
 
 
