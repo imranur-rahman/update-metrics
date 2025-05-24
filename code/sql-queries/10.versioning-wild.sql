@@ -1,7 +1,10 @@
+ALTER TABLE relations_minified DROP COLUMN IF EXISTS requirement_type;
+
+
 -- Adding a new column to the relations_minified table
 -- to store the constraint type
 ALTER TABLE relations_minified
-ADD COLUMN requirement_type VARCHAR(50);
+ADD COLUMN requirement_type TEXT;
 
 UPDATE relations_minified
 SET requirement_type = CASE
@@ -15,8 +18,9 @@ SET requirement_type = CASE
 END;
 
 UPDATE relations_minified
-SET requirement_type = 'NULL'
-WHERE actual_requirement IS NULL;
+SET requirement_type = 'null'
+WHERE actual_requirement IS NULL
+    AND is_regular = true;
 -- UPDATE 8000645
 
 CREATE INDEX relations_minified_index_4
