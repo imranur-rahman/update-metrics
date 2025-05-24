@@ -501,7 +501,7 @@ ORDER BY
 --  PYPI        | >v                  |          37
 --  PYPI        | NULL                |     8000645
 --  PYPI        | ~=                  |      604052
--- (155 rows)
+-- (169 rows)
 
 
 CREATE TABLE aggregated_dependency_status AS
@@ -624,313 +624,171 @@ ORDER BY requirement_changes DESC;
 
 
 
--- with fine grained version specifying strategy
 
--- First create custom type for version components
-CREATE TYPE version_component AS (
-    operator text,
-    version semver
-);
 
--- Create helper functions for semver components
-CREATE OR REPLACE FUNCTION semver_major(ver semver) 
-RETURNS integer AS $$
-BEGIN
-    RETURN (regexp_split_to_array(ver::text, '\.'))[1]::integer;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION semver_minor(ver semver) 
-RETURNS integer AS $$
-BEGIN
-    RETURN (regexp_split_to_array(ver::text, '\.'))[2]::integer;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION semver_patch(ver semver) 
-RETURNS integer AS $$
-BEGIN
-    RETURN (regexp_split_to_array(ver::text, '\.'))[3]::integer;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create function to parse version specs
-CREATE OR REPLACE FUNCTION parse_version_spec(spec text) 
-RETURNS version_component[] AS $$
-DECLARE
-    parts text[];
-    result version_component[];
-    part text;
-    ver_str text;
-    comp version_component;
-BEGIN
-    -- Split on both spaces and other delimiters, normalize all delimiters to ||
-    parts := string_to_array(
-        regexp_replace(
-            regexp_replace(
-                regexp_replace(spec, '\s+(?=[<>])', '||', 'g'),  -- Space before operator
-                '[,\s]+', '||', 'g'                              -- Commas and other spaces
-            ),
-            '\|\|\|+', '||', 'g'                                -- Clean up multiple ||
-        ),
-        '||'
-    );
-    
-    -- Process each part and sort them
-    FOR part IN 
-        SELECT p FROM unnest(parts) p 
-        WHERE p != ''
-        ORDER BY 
-            CASE 
-                WHEN p ~ '^>' THEN 1  -- Make > come before <
-                WHEN p ~ '^<' THEN 2
-                ELSE 3
-            END 
-    LOOP
-        -- Extract operator and version
-        IF part ~ '^[><]=?' THEN
-            comp.operator := substring(part from '^[><]=?');
-            ver_str := substring(part from '[0-9].*');
-        ELSE
-            comp.operator := '=';
-            ver_str := part;
-        END IF;
-        
-        -- Clean version string and handle different formats
-        ver_str := regexp_replace(ver_str, '[^0-9.].*$', '');
-        IF ver_str ~ '^[0-9]+$' THEN
-            ver_str := ver_str || '.0.0';
-        ELSIF ver_str ~ '^[0-9]+\.[0-9]+$' THEN
-            ver_str := ver_str || '.0';
-        END IF;
-        
-        IF ver_str ~ '^[0-9]+\.[0-9]+\.[0-9]+$' THEN
-            BEGIN
-                comp.version := ver_str::semver;
-                result := array_append(result, comp);
-            EXCEPTION 
-                WHEN OTHERS THEN
-                    NULL;
-            END;
-        END IF;
-    END LOOP;
-    
-    RETURN result;
-END;
-$$ LANGUAGE plpgsql;
-
--- Main function to determine spec type
+-- Function to classify version specifications
+-- This function classifies version specifications into different categories
 -- CREATE OR REPLACE FUNCTION get_spec_type(spec text)
 -- RETURNS text AS $$
 -- DECLARE
---     comps version_component[];
---     comp1 version_component;
---     comp2 version_component;
+--     req text := lower(trim(spec));
 -- BEGIN
---     -- Handle simple cases first
---     IF spec = '*' OR spec = 'latest' OR spec = 'x' OR spec = 'x.x' OR spec = 'x.x.x' THEN
---         RETURN 'floating - major';
---     END IF;
-    
---     IF spec LIKE '~%' THEN
---         RETURN 'floating - patch';
---     END IF;
-    
---     IF spec LIKE '^%' THEN
---         RETURN 'floating - minor';
+
+--     -- Handle null input
+--     IF req IS NULL THEN
+--         RETURN 'null';
 --     END IF;
 
---     -- Handle x-based patterns
---     IF spec ~ '^[0-9]+\.x\.x$' THEN
---         RETURN 'floating - minor';
+--     -- OR-combination: prioritize early
+--     IF req LIKE '%||%' THEN
+--         RETURN 'or-expression';
 --     END IF;
 
---     IF spec ~ '^[0-9]+\.[0-9]+\.x$' THEN
---         RETURN 'floating - patch';
+--     -- Floating-major
+--     IF req IN ('*', 'latest', 'x', 'x.x', 'x.x.x') OR req ~ '^\*\.\*\.\*$' OR
+--           (req LIKE '>=%' AND substring(req from 3) !~ '[<>=!*~^]') OR
+--           (req LIKE '>%' AND substring(req from 2) !~ '[<>=!*~^]') THEN
+--         RETURN 'floating-major';
 --     END IF;
 
---     -- Parse version spec
---     comps := parse_version_spec(spec);
-    
---     -- Handle single version component
---     IF array_length(comps, 1) = 1 THEN
---         IF comps[1].operator = '=' THEN
---             RETURN 'pinned';
---         ELSIF comps[1].operator LIKE '>' OR comps[1].operator = '>=' THEN
---             RETURN 'floating - major';
---         ELSIF comps[1].operator LIKE '<' OR comps[1].operator = '<=' THEN
---             RETURN 'other';
---         END IF;
+--     -- Floating-patch
+--     IF req ~ '^=?=?\d+\.\d+\.x$' OR req ~ '^=?=?\d+\.\d+\.\*$' OR req ~ '^\d+\.\d+\.x$' OR
+--           (req LIKE '~%' AND req NOT LIKE '%,%') OR
+--           (req LIKE '~=%' AND req !~ '[><^*]') THEN
+--         RETURN 'floating-patch';
 --     END IF;
 
---     -- Handle version ranges
---     IF array_length(comps, 1) = 2 THEN
---         comp1 := comps[1];
---         comp2 := comps[2];
-        
---         -- Check for floating - minor pattern FIRST
---         IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
---            (semver_major(comp2.version) = semver_major(comp1.version) + 1 OR 
---             semver_major(comp2.version) = semver_major(comp1.version)) AND
---            (semver_minor(comp2.version) = 0) AND
---            (semver_patch(comp2.version) = 0) THEN
---             RETURN 'floating - minor';
---         END IF;
-
---         -- Check for floating - patch pattern
---         IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
---            (semver_major(comp2.version) = semver_major(comp1.version)) AND
---            (semver_minor(comp2.version) = semver_minor(comp1.version) + 1) AND
---            (semver_minor(comp2.version) != 0) AND
---            (semver_patch(comp2.version) = 0) THEN
---             RETURN 'floating - patch';
---         END IF;
-
---         -- Check for floating - major - restrictive pattern
---         IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
---            (semver_major(comp2.version) > semver_major(comp1.version) + 1) THEN
---             RETURN 'floating - major - restrictive';
---         END IF;
+--     -- Floating-minor
+--     IF req ~ '^=?=?\d+\.x(\.x)?$' OR req ~ '^=?=?\d+\.\*(\.\*)?$' OR req ~ '^x\.\*$' OR req LIKE '^%' THEN
+--         RETURN 'floating-minor';
 --     END IF;
 
---     RETURN 'other';
--- EXCEPTION 
---     WHEN OTHERS THEN
---         RETURN 'other';
+--     -- Range
+--     IF req ~ '^[<>]=?\s*\d+(\.\d+){0,2}(\s*,\s*|\s+)[<>]=?\s*\d+(\.\d+){0,2}$' OR
+--           req ~ '^\d+(\.\d+)?(\.\w+)?\s*-\s*\d+(\.\d+)?(\.\w+)?$' OR
+--           (req LIKE '%<%' AND req LIKE '%>%' AND req !~ '[!*~^]') OR
+--           (req LIKE '% - %' AND req !~ '[!*~^<>]') THEN
+--         RETURN 'fixed-ranging';
+--     END IF;
+
+--     -- Unclassified
+--     IF req LIKE '%github%' OR req LIKE '%gitlab%' OR req LIKE '%git%' OR
+--           req LIKE '%npm:%' THEN
+--         RETURN 'unclassified';
+--     END IF;
+
+--     -- Pinning: simple versions with no operators
+--     IF req ~ '^[\w\.\-\+]+' AND req !~ '[<>=!*~^]' AND NOT req LIKE '%.x%' THEN
+--         RETURN 'pinning';
+--     END IF;
+
+--     -- At-most
+--     IF req ~ '^<=?\s*\d+(\.\d+){0,2}(-[a-z0-9]+)?$' OR
+--           (req LIKE '<%' AND substring(req from 2) !~ '[=>!*~^]') OR
+--           (req LIKE '<=%' AND substring(req from 3) !~ '[>!*~^]') THEN
+--         RETURN 'at-most';
+--     END IF;
+
+--     -- Not
+--     IF req ~ '^!?=?\d+(\.\d+){0,2}$' AND req LIKE '!%' THEN
+--         RETURN 'not-expression';
+--     END IF;
+
+--     -- Pinning with metadata or pre-release
+--     IF req ~ '^\d+(\.\d+){0,2}(-[\w\.-]+)?(\+[\w\.-]+)?$' OR
+--           ((req LIKE '=%' OR req LIKE '==%') AND req !~ '[<>\*!~^]') THEN
+--         RETURN 'pinning';
+--     END IF;
+
+--     -- Complex expression
+--     IF req ~ '[<>=!~^]' THEN
+--         RETURN 'complex-expression';
+--     END IF;
+
+--     -- Final fallback pinning (e.g., bare version with optional metadata)
+--     IF req ~ '^\d+(\.\d+){0,2}(-[\w\.-]+)?(\+[\w\.-]+)?$' THEN
+--         RETURN 'pinning';
+--     END IF;
+
+--     RETURN 'unclassified';
 -- END;
 -- $$ LANGUAGE plpgsql;
-
-
-
-
--- Test cases
--- SELECT get_spec_type('*');                    -- 'floating - major'
--- SELECT get_spec_type('latest');               -- 'floating - major'
--- SELECT get_spec_type('~1.2.3');               -- 'floating - patch'
--- SELECT get_spec_type('^1.2.3');               -- 'floating - minor'
--- SELECT get_spec_type('1.2.3');                -- 'pinned'
--- SELECT get_spec_type('1.x.x');                -- 'floating - minor'
--- SELECT get_spec_type('1.2.x');                -- 'floating - patch'      
--- SELECT get_spec_type('>=1.2.3');              -- 'floating - major'
--- SELECT get_spec_type('<1.2.3');               -- 'other'
--- SELECT parse_version_spec('>=1.2.3 <2.0.0');  -- {"(>=,1.2.3)","(<,2.0.0)"}
--- SELECT get_spec_type('>=1.2.3 <2.0.0');       -- 'floating - minor'
--- SELECT get_spec_type('>=1.2.3 <1.3.0');       -- 'floating - patch'
--- SELECT get_spec_type('>1.0.0 <6');            -- 'floating - major - restrictive'
--- SELECT get_spec_type('>1.0.0 <6.0');        -- 'floating - major - restrictive'
--- SELECT get_spec_type('>=1.2.3 <5.0.0');       -- 'floating - major - restrictive'
--- SELECT get_spec_type('>2.0.0 <6.0.0');        -- 'floating - major - restrictive'
--- SELECT get_spec_type('^1.2.0 || ^2.0.0');     -- it should be 'other', but the current version is returning 'floating - minor'
--- SELECT get_spec_type('>= 1.2.3 || <= 1.2.4'); -- "other"
--- SELECT get_spec_type('>= 1.2.3 <= 1.2.4');    -- "other"
--- SELECT get_spec_type('<2.0.0 || >=1.2.3');    -- "floating - minor"
--- SELECT get_spec_type('npm:eslint-plugin-i@2.27.5-4'); -- "other"
-
-
--- SELECT get_spec_type('<2.8,>=2.4');
--- SELECT get_spec_type('<2.16.0,>=2.6');
--- SELECT get_spec_type('<=2.18.2');
--- SELECT get_spec_type('==2.10.*');
--- SELECT get_spec_type('==1.1.post2');
--- SELECT get_spec_type('>= 5.0.0 < 9.0.0');
--- SELECT get_spec_type('13.0.x || > 13.1.0 < 14.0.0');
--- SELECT get_spec_type('=0.8.x');
--- SELECT get_spec_type('>= 6.x.x');
--- SELECT get_spec_type('0.18 - 0.26 || ^0.26.0');
--- SELECT get_spec_type('7.*');
--- SELECT get_spec_type('7.x');
--- SELECT get_spec_type('>=10 <= 11');
--- SELECT get_spec_type('v3.6.0-upgrade-to-lit.1');    
--- SELECT get_spec_type('11 || 12 || 13');
--- SELECT get_spec_type('>= 1.2.3 < 2.0.0');
--- SELECT get_spec_type('>=3 || >=3.0.0-beta');    
--- SELECT get_spec_type('v1.0.0');
--- SELECT get_spec_type('>1.1.2-dev <1.1.2-ropsten');
--- SELECT get_spec_type('0.6.X');
--- SELECT get_spec_type('==1.0.0.dev11');
--- SELECT get_spec_type('~=1.0.0.dev20');
--- SELECT get_spec_type('>=1.3.0,~=1.3');
--- SELECT get_spec_type('~=1.3,>=1.3.0');
--- SELECT get_spec_type('~=1.3');
--- SELECT get_spec_type('1.0.6-alpha.18494658a.0');
--- SELECT get_spec_type('6.2.9-alpha-aa43054d.0');
-
-
 CREATE OR REPLACE FUNCTION get_spec_type(spec text)
 RETURNS text AS $$
 DECLARE
-    req text := lower(trim(spec));
+    req text;
 BEGIN
-
-    -- Handle null input
-    IF req IS NULL THEN
+    -- Early return for NULL
+    IF spec IS NULL THEN
         RETURN 'null';
     END IF;
 
-    -- OR-combination: prioritize early
-    IF req LIKE '%||%' THEN
-        RETURN 'or-expression';
-    END IF;
+    -- Pre-process once
+    req := lower(trim(spec));
 
-    -- Floating-major
-    IF req IN ('*', 'latest', 'x', 'x.x', 'x.x.x') OR req ~ '^\*\.\*\.\*$' OR
-          (req LIKE '>=%' AND NOT req ~ '[<>=!*]' AND substring(req from 3) !~ '[<>=!*]') OR
-          (req LIKE '>%' AND NOT req ~ '[<>=!*]' AND substring(req from 2) !~ '[<>=!*]') THEN
-        RETURN 'floating-major';
-    END IF;
+    RETURN CASE
+        -- Quick checks first (no regex)
+        WHEN req LIKE '%||%' THEN 'or-expression'
+        WHEN req IN ('*', 'latest', 'x', 'x.x', 'x.x.x') THEN 'floating-major'
+        WHEN req LIKE '%github%' OR req LIKE '%gitlab%' OR req LIKE '%git%' OR
+             req LIKE '%npm:%' THEN 'unclassified'
+        
+        -- Pinned version with equals and post/dev/alpha/beta suffixes
+        WHEN req ~ '^=?=?\d+(\.\d+)*((\.?post\d*)|(-\w+))?$' THEN 'pinning'
+        
+        -- Rest of the patterns...
+        
+        -- Floating-minor
+        WHEN req ~ '^=?=?\d+\.x(\.x)?$' OR req ~ '^=?=?\d+\.\*(\.\*)?$' OR req ~ '^x\.\*$' OR req LIKE '^%' THEN
+             'floating-minor'
 
-    -- Floating-patch
-    IF req ~ '^=?=?\d+\.\d+\.x$' OR req ~ '^=?=?\d+\.\d+\.\*$' OR req ~ '^\d+\.\d+\.x$' OR
-          (req LIKE '~%' AND req NOT LIKE '%,%') THEN
-        RETURN 'floating-patch';
-    END IF;
-
-    -- Floating-minor
-    IF req ~ '^=?=?\d+\.x(\.x)?$' OR req ~ '^=?=?\d+\.\*(\.\*)?$' OR req ~ '^x\.\*$' OR req LIKE '^%' THEN
-        RETURN 'floating-minor';
-    END IF;
-
-    -- Pinning: simple versions with no operators
-    IF req ~ '^[\w\.\-\+]+' AND req !~ '[<>=!*x]' THEN
-        RETURN 'pinning';
-    END IF;
-
-    -- At-most
-    IF req ~ '^<=?\s*\d+(\.\d+){0,2}(-[a-z0-9]+)?$' OR
-          (req LIKE '<%' AND substring(req from 2) !~ '[=>!*~^]') OR
-          (req LIKE '<=%' AND substring(req from 3) !~ '[>!*~^]') THEN
-        RETURN 'at-most';
-    END IF;
-
-    -- Range
-    IF req ~ '^[<>]=?\s*\d+(\.\d+){0,2}(\s*,\s*|\s+)[<>]=?\s*\d+(\.\d+){0,2}$' OR
-          req ~ '^\d+(\.\d+)?(\.\w+)?\s*-\s*\d+(\.\d+)?(\.\w+)?$' OR
-          (req LIKE '%<%' AND req LIKE '%>%' AND req !~ '[!*~^]') THEN
-        RETURN 'fixed-ranging';
-    END IF;
-
-    -- Not
-    IF req ~ '^!?=?\d+(\.\d+){0,2}$' AND req LIKE '!%' THEN
-        RETURN 'not-expression';
-    END IF;
-
-    -- Pinning with metadata or pre-release
-    IF req ~ '^\d+(\.\d+){0,2}(-[\w\.-]+)?(\+[\w\.-]+)?$' OR
-          ((req LIKE '=%' OR req LIKE '==%') AND req !~ '[<>\*!~^]') THEN
-        RETURN 'pinning';
-    END IF;
-
-    -- Complex expression
-    IF req ~ '[<>=!~^]' THEN
-        RETURN 'complex-expression';
-    END IF;
-
-    -- Final fallback pinning (e.g., bare version with optional metadata)
-    IF req ~ '^\d+(\.\d+){0,2}(-[\w\.-]+)?(\+[\w\.-]+)?$' THEN
-        RETURN 'pinning';
-    END IF;
-
-    RETURN 'unclassified';
+        -- Floating-major
+        WHEN req ~ '^\*\.\*\.\*$' OR
+             (req LIKE '>=%' AND substring(req from 3) !~ '[<>=!*~^]') OR
+             (req LIKE '>%' AND substring(req from 2) !~ '[<>=!*~^]') 
+             THEN 'floating-major'
+        
+        -- Floating-patch
+        WHEN req ~ '^=?=?\d+\.\d+\.x$' OR req ~ '^=?=?\d+\.\d+\.\*$' OR req ~ '^\d+\.\d+\.x$' OR
+             (req LIKE '~%' AND req NOT LIKE '%,%') OR
+             (req LIKE '~=%' AND req !~ '[><^*]') THEN
+             'floating-patch'
+        
+        -- Range
+        WHEN req ~ '^[<>]=?\s*\d+(\.\d+){0,2}(\s*,\s*|\s+)[<>]=?\s*\d+(\.\d+){0,2}$' OR
+             req ~ '^\d+(\.\d+)?(\.\w+)?\s*-\s*\d+(\.\d+)?(\.\w+)?$' OR
+             (req LIKE '%<%' AND req LIKE '%>%' AND req !~ '[!*~^]') OR
+             (req LIKE '% - %' AND req !~ '[!*~^<>]') THEN
+             'fixed-ranging'
+        
+        -- Unclassified
+        WHEN req LIKE '%github%' OR req LIKE '%gitlab%' OR req LIKE '%git%' OR
+             req LIKE '%npm:%' THEN 'unclassified'
+        
+        -- Pinning: simple versions with no operators
+        WHEN req ~ '^[\w\.\-\+]+' AND req !~ '[<>=!*~^]' AND NOT req LIKE '%.x%' THEN
+             'pinning'
+        
+        -- At-most
+        WHEN req ~ '^<=?\s*\d+(\.\d+){0,2}(-[a-z0-9]+)?$' OR
+             (req LIKE '<%' AND substring(req from 2) !~ '[=>!*~^]') OR
+             (req LIKE '<=%' AND substring(req from 3) !~ '[>!*~^]') THEN
+             'at-most'
+        
+        -- Not
+        WHEN req ~ '^!?=?\d+(\.\d+){0,2}$' AND req LIKE '!%' THEN
+             'not-expression'
+        
+        -- Pinning with metadata or pre-release
+        WHEN req ~ '^\d+(\.\d+){0,2}(-[\w\.-]+)?(\+[\w\.-]+)?$' OR
+             ((req LIKE '=%' OR req LIKE '==%') AND req !~ '[<>\*!~^]') THEN
+             'pinning'
+        
+        -- Complex expression
+        WHEN req ~ '[<>=!~^,]' THEN 'complex-expression'
+        
+        ELSE 'unclassified'
+    END;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -944,88 +802,130 @@ DROP TABLE IF EXISTS test_spec_types;
 CREATE TEMP TABLE test_spec_types (
     case_id INTEGER,
     spec TEXT,
-    detected_type TEXT
+    detected_type TEXT,
+    expected_type TEXT
 );
 
+
 -- Step 2: Insert all test cases and capture output
-INSERT INTO test_spec_types (case_id, spec, detected_type)
+INSERT INTO test_spec_types (case_id, spec, detected_type, expected_type)
 VALUES
-(1,  '*',                    get_spec_type('*')),
-(2,  'latest',               get_spec_type('latest')),
-(3,  '~1.2.3',               get_spec_type('~1.2.3')),
-(4,  '^1.2.3',               get_spec_type('^1.2.3')),
-(5,  '1.2.3',                get_spec_type('1.2.3')),
-(6,  '1.x.x',                get_spec_type('1.x.x')),
-(7,  '1.2.x',                get_spec_type('1.2.x')),
-(8,  '>=1.2.3',              get_spec_type('>=1.2.3')),
-(9,  '<1.2.3',               get_spec_type('<1.2.3')),
-(10, '>=1.2.3 <2.0.0',       get_spec_type('>=1.2.3 <2.0.0')),
-(11, '>=1.2.3 <1.3.0',       get_spec_type('>=1.2.3 <1.3.0')),
-(12, '>1.0.0 <6',            get_spec_type('>1.0.0 <6')),
-(13, '>1.0.0 <6.0',          get_spec_type('>1.0.0 <6.0')),
-(14, '>=1.2.3 <5.0.0',       get_spec_type('>=1.2.3 <5.0.0')),
-(15, '>2.0.0 <6.0.0',        get_spec_type('>2.0.0 <6.0.0')),
-(16, '^1.2.0 || ^2.0.0',     get_spec_type('^1.2.0 || ^2.0.0')),
-(17, '>= 1.2.3 || <= 1.2.4', get_spec_type('>= 1.2.3 || <= 1.2.4')),
-(18, '>= 1.2.3 <= 1.2.4',    get_spec_type('>= 1.2.3 <= 1.2.4')),
-(19, '<2.0.0 || >=1.2.3',    get_spec_type('<2.0.0 || >=1.2.3')),
-(20, 'npm:eslint-plugin-i@2.27.5-4', get_spec_type('npm:eslint-plugin-i@2.27.5-4')),
-(21, '<2.8,>=2.4',           get_spec_type('<2.8,>=2.4')),
-(22, '<2.16.0,>=2.6',        get_spec_type('<2.16.0,>=2.6')),
-(23, '<=2.18.2',             get_spec_type('<=2.18.2')),
-(24, '==2.10.*',             get_spec_type('==2.10.*')),
-(25, '==1.1.post2',          get_spec_type('==1.1.post2')),
-(26, '>= 5.0.0 < 9.0.0',     get_spec_type('>= 5.0.0 < 9.0.0')),
-(27, '13.0.x || > 13.1.0 < 14.0.0', get_spec_type('13.0.x || > 13.1.0 < 14.0.0')),
-(28, '=0.8.x',               get_spec_type('=0.8.x')),
-(29, '>= 6.x.x',             get_spec_type('>= 6.x.x')),
-(30, '0.18 - 0.26 || ^0.26.0', get_spec_type('0.18 - 0.26 || ^0.26.0')),
-(31, '7.*',                  get_spec_type('7.*')),
-(32, '7.x',                  get_spec_type('7.x')),
-(33, '>=10 <= 11',           get_spec_type('>=10 <= 11')),
-(34, 'v3.6.0-upgrade-to-lit.1', get_spec_type('v3.6.0-upgrade-to-lit.1')),
-(35, '11 || 12 || 13',       get_spec_type('11 || 12 || 13')),
-(36, '>= 1.2.3 < 2.0.0',     get_spec_type('>= 1.2.3 < 2.0.0')),
-(37, '>=3 || >=3.0.0-beta',  get_spec_type('>=3 || >=3.0.0-beta')),
-(38, 'v1.0.0',               get_spec_type('v1.0.0')),
-(39, '>1.1.2-dev <1.1.2-ropsten', get_spec_type('>1.1.2-dev <1.1.2-ropsten')),
-(40, '0.6.X',                get_spec_type('0.6.X')),
-(41, '==1.0.0.dev11',        get_spec_type('==1.0.0.dev11')),
-(42, '~=1.0.0.dev20',        get_spec_type('~=1.0.0.dev20')),
-(43, '>=1.3.0,~=1.3',        get_spec_type('>=1.3.0,~=1.3')),
-(44, '~=1.3,>=1.3.0',        get_spec_type('~=1.3,>=1.3.0')),
-(45, '~=1.3',                get_spec_type('~=1.3')),
-(46, '1.0.6-alpha.18494658a.0', get_spec_type('1.0.6-alpha.18494658a.0')),
-(47, '6.2.9-alpha-aa43054d.0',  get_spec_type('6.2.9-alpha-aa43054d.0'));
+(1, '*', get_spec_type('*'), 'floating-major'),
+(2, 'latest', get_spec_type('latest'), 'floating-major'),
+(3, '~1.2.3', get_spec_type('~1.2.3'), 'floating-patch'),
+(4,  '^1.2.3',               get_spec_type('^1.2.3'), 'floating-minor'),
+(5,  '1.2.3',                get_spec_type('1.2.3'), 'pinning'),
+(6,  '1.x.x',                get_spec_type('1.x.x'), 'floating-minor'),
+(7,  '1.2.x',                get_spec_type('1.2.x'), 'floating-patch'),
+(8,  '>=1.2.3',              get_spec_type('>=1.2.3'), 'floating-major'),
+(9,  '<1.2.3',               get_spec_type('<1.2.3'), 'at-most'),
+(10, '>=1.2.3 <2.0.0',       get_spec_type('>=1.2.3 <2.0.0'), 'fixed-ranging'),
+(11, '>=1.2.3 <1.3.0',       get_spec_type('>=1.2.3 <1.3.0'), 'fixed-ranging'),
+(12, '>1.0.0 <6',            get_spec_type('> 1.0.0 < 6'), 'fixed-ranging'),
+(13, '>1.0.0 <6.0',          get_spec_type('>1.0.0 <6.0'), 'fixed-ranging'),
+(14, '>=1.2.3 <5.0.0',       get_spec_type('>=1.2.3 <5.0.0'), 'fixed-ranging'),
+(15, '>2.0.0 <6.0.0',        get_spec_type('> 2.0.0 < 6.0.0'), 'fixed-ranging'),
+(16, '^1.2.0 || ^2.0.0',     get_spec_type('^1.2.0 || ^2.0.0'), 'or-expression'),
+(17, '>= 1.2.3 || <= 1.2.4', get_spec_type('>= 1.2.3 || <= 1.2.4'), 'or-expression'),
+(18, '>= 1.2.3 <= 1.2.4',    get_spec_type('>= 1.2.3 <= 1.2.4'), 'fixed-ranging'),
+(19, '<2.0.0 || >=1.2.3',    get_spec_type('<2.0.0 || >=1.2.3'), 'or-expression'),
+(20, 'npm:eslint-plugin-i@2.27.5-4', get_spec_type('npm:eslint-plugin-i@2.27.5-4'), 'unclassified'),
+(21, '<2.8,>=2.4',           get_spec_type('<2.8,>=2.4'), 'fixed-ranging'),
+(22, '<2.16.0,>=2.6',        get_spec_type('<2.16.0,>=2.6'), 'fixed-ranging'),
+(23, '<=2.18.2',             get_spec_type('<=2.18.2'), 'at-most'),
+(24, '==2.10.*',             get_spec_type('==2.10.*'), 'floating-patch'),
+(25, '==1.1.post2',          get_spec_type('==1.1.post2'), 'pinning'),
+(26, '>= 5.0.0 < 9.0.0',     get_spec_type('>= 5.0.0 < 9.0.0'), 'fixed-ranging'),
+(27, '13.0.x || > 13.1.0 < 14.0.0', get_spec_type('13.0.x || > 13.1.0 < 14.0.0'), 'or-expression'),
+(28, '=0.8.x',               get_spec_type('=0.8.x'), 'floating-patch'),
+(29, '>= 6.x.x',             get_spec_type('>= 6.x.x'), 'floating-major'),
+(30, '0.18 - 0.26 || ^0.26.0', get_spec_type('0.18 - 0.26 || ^0.26.0'), 'or-expression'),
+(31, '7.*',                  get_spec_type('7.*'), 'floating-minor'),
+(32, '7.x',                  get_spec_type('7.x'), 'floating-minor'),
+(33, '>=10 <= 11',           get_spec_type('>=10 <= 11'), 'fixed-ranging'),
+(34, 'v3.6.0-upgrade-to-lit.1', get_spec_type('v3.6.0-upgrade-to-lit.1'), 'pinning'),
+(35, '11 || 12 || 13',       get_spec_type('11 || 12 || 13'), 'or-expression'),
+(36, '>= 1.2.3 < 2.0.0',     get_spec_type('>= 1.2.3 < 2.0.0'), 'fixed-ranging'),
+(37, '>=3 || >=3.0.0-beta',  get_spec_type('>=3 || >=3.0.0-beta'), 'or-expression'),
+(38, 'v1.0.0',               get_spec_type('v1.0.0'), 'pinning'),
+(39, '>1.1.2-dev <1.1.2-ropsten', get_spec_type('>1.1.2-dev <1.1.2-ropsten'), 'fixed-ranging'),
+(40, '0.6.X',                get_spec_type('0.6.X'), 'floating-patch'),
+(41, '==1.0.0.dev11',        get_spec_type('==1.0.0.dev11'), 'pinning'),
+(42, '~=1.0.0.dev20',        get_spec_type('~=1.0.0.dev20'), 'floating-patch'),
+(43, '>=1.3.0,~=1.3',        get_spec_type('>=1.3.0,~=1.3'), 'complex-expression'),
+(44, '~=1.3,>=1.3.0',        get_spec_type('~=1.3,>=1.3.0'), 'complex-expression'),
+(45, '~=1.3',                get_spec_type('~=1.3'), 'floating-patch'),
+(46, '1.0.6-alpha.18494658a.0', get_spec_type('1.0.6-alpha.18494658a.0'), 'pinning'),
+(47, '6.2.9-alpha-aa43054d.0',  get_spec_type('6.2.9-alpha-aa43054d.0'), 'pinning'),
+(48, '>=0.12', get_spec_type('>=0.12'), 'floating-major'),
+(49, '>= 0.9, ^0.10.0', get_spec_type('>= 0.9, ^0.10.0'), 'complex-expression'),
+(50, '19.1.4 - 21', get_spec_type('19.1.4 - 21'), 'fixed-ranging'),
+(51, '5.1.2 - 6.7.0', get_spec_type('5.1.2 - 6.7.0'), 'fixed-ranging'),
+(52, '2 - 4', get_spec_type('2 - 4'), 'fixed-ranging');
+
 
 -- Step 3: Display results
-SELECT * FROM test_spec_types ORDER BY case_id;
+SELECT case_id, spec, detected_type, expected_type,
+       detected_type = expected_type AS pass
+FROM test_spec_types
+ORDER BY case_id;
 
+
+
+-- drop column if needed and then add the new column
+ALTER TABLE relations_minified DROP COLUMN IF EXISTS requirement_type;
+-- Adding a new column to the relations_minified table
+-- to store the constraint type
+ALTER TABLE relations_minified
+ADD COLUMN requirement_type TEXT DEFAULT 'unclassified';
+
+-- update cost for parallel execution
+-- ALTER FUNCTION get_spec_type(text) SET parallel_worker_cost = 0;
+ALTER FUNCTION get_spec_type(text) SET parallel_tuple_cost = 0;
 
 UPDATE relations_minified
 SET requirement_type = get_spec_type(actual_requirement)
 WHERE actual_requirement IS NOT NULL
 AND is_regular = true;
 
+DROP INDEX IF EXISTS relations_index_4;
 CREATE INDEX relations_index_4 ON relations_minified (requirement_type);
+
+
+-- Occurance of each requirement type
+SELECT 
+    requirement_type,
+    COUNT(*) as count,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) as percentage
+FROM 
+    relations_minified
+WHERE
+    is_regular = true
+    AND actual_requirement IS NOT NULL
+GROUP BY 
+    requirement_type
+ORDER BY 
+    count DESC;
 
 
 
 -- outdated dependencies: general overview
 -- result to RQ1
-WITH highest AS (
+-- 1. Materialize common calculations first
+WITH RECURSIVE highest AS (
     SELECT MAX(interval_start) as db_creation_date
     FROM relations_minified
 ),
-categorized_requirements AS (
+-- 2. Pre-filter and index the base data
+filtered_requirements AS (
     SELECT 
-        -- we don't care about system_name for now
         requirement_type,
         from_package_name,
         from_version,
         to_package_name,
         interval_start,
-        interval_end
+        interval_end,
+        (SELECT db_creation_date FROM highest) as db_creation_date
     FROM 
         relations_minified
     WHERE 
@@ -1033,52 +933,65 @@ categorized_requirements AS (
         AND is_out_of_date = true
         AND actual_requirement IS NOT NULL
 ),
-total_days_cte AS (
-    SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(interval_end, (select db_creation_date from highest)) - interval_start))/86400) as sum_total_days
-    FROM categorized_requirements
+-- 3. Pre-calculate days for each record
+days_calculated AS (
+    SELECT 
+        *,
+        EXTRACT(EPOCH FROM (COALESCE(interval_end, db_creation_date) - interval_start))/86400 as days
+    FROM filtered_requirements
+),
+-- 4. Calculate total days once
+total_days AS (
+    SELECT SUM(days) as sum_total_days
+    FROM days_calculated
 )
+-- 5. Final aggregation with pre-calculated values
 SELECT 
     requirement_type,
     COUNT(*) as total_count,
-    COUNT(DISTINCT from_package_name || '|' || from_version || '|' || to_package_name) as unique_pkg_pkgver_dep_count,
-    COUNT(DISTINCT from_package_name || '|' || to_package_name) as unique_pkg_dep_count,
+    COUNT(DISTINCT CONCAT_WS('|', from_package_name, from_version, to_package_name)) as unique_pkg_pkgver_dep_count,
+    COUNT(DISTINCT CONCAT_WS('|', from_package_name, to_package_name)) as unique_pkg_dep_count,
     COUNT(DISTINCT from_package_name) as unique_pkg_count,
-    SUM(EXTRACT(EPOCH FROM (COALESCE(interval_end, (select db_creation_date from highest)) - interval_start))/86400) as total_days,
-    ROUND(100.0 * SUM(EXTRACT(EPOCH FROM (COALESCE(interval_end, (select db_creation_date from highest)) - interval_start))/86400) / 
-        (SELECT sum_total_days FROM total_days_cte), 2) as days_percentage
+    SUM(days) as total_days,
+    ROUND(100.0 * SUM(days) / NULLIF((SELECT sum_total_days FROM total_days), 0), 2) as days_percentage
 FROM 
-    categorized_requirements
+    days_calculated
 GROUP BY 
     requirement_type
 ORDER BY 
     total_days DESC;
 
 
---         requirement_type        | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |             total_days             | days_percentage 
--- --------------------------------+-------------+-----------------------------+----------------------+------------------+------------------------------------+-----------------
---  floating - minor               |    14493894 |                     7882374 |               367848 |            94217 | 179692596.289594907407245699343349 |           61.95
---  pinned                         |    11705617 |                     8924119 |               163975 |            39056 |  71395294.055914351851741317448968 |           24.61
---  other                          |     1687818 |                      888391 |                51914 |            13681 |  22005715.599745370370561369146618 |            7.59
---  floating - patch               |     1286413 |                      644474 |                38573 |            14477 |  16030421.686435185185072258513853 |            5.53
---  floating - major - restrictive |       33393 |                       13824 |                 2045 |             1648 |    576225.945335648148179789256192 |            0.20
---  floating - major               |       61871 |                       11425 |                 2427 |             2026 |    380660.184803240740732975185058 |            0.13
--- (6 rows)
+-- requirement_type  | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |             total_days             | days_percentage 
+-- --------------------+-------------+-----------------------------+----------------------+------------------+------------------------------------+-----------------
+--  floating-minor     |    13966739 |                     7730545 |               354678 |            87637 | 175385311.691874999999644045047490 |           60.46
+--  pinning            |    13119822 |                     9688783 |               204411 |            47756 |  89341267.178090277777786463474306 |           30.80
+--  floating-patch     |     1119247 |                      562438 |                30679 |            11096 |  13592199.934398148148076687992373 |            4.69
+--  fixed-ranging      |      864636 |                      315277 |                26998 |            10580 |   9514432.497974537037292471142631 |            3.28
+--  at-most            |       96119 |                       47142 |                 4995 |             3172 |   1489288.566956018518522062771840 |            0.51
+--  complex-expression |       69986 |                       14836 |                 3014 |             2430 |    489023.193761574074072804822064 |            0.17
+--  or-expression      |       30923 |                       14117 |                  946 |              645 |    262043.914444444444436025375186 |            0.09
+--  not-expression     |        1534 |                         276 |                  106 |              100 |      7346.784328703703702848268148 |            0.00
+-- (8 rows)
 
 
 -- vulnerable dependencies: general overview
 -- result to RQ1
-WITH highest AS (
+-- 1. Materialize common calculations first
+WITH RECURSIVE highest AS (
     SELECT MAX(interval_start) as db_creation_date
     FROM relations_minified
 ),
-categorized_requirements AS (
+-- 2. Pre-filter and index the base data
+filtered_requirements AS (
     SELECT 
         requirement_type,
         from_package_name,
         from_version,
         to_package_name,
         interval_start,
-        interval_end
+        interval_end,
+        (SELECT db_creation_date FROM highest) as db_creation_date
     FROM 
         relations_minified
     WHERE 
@@ -1086,33 +999,45 @@ categorized_requirements AS (
         AND is_exposed = true
         AND actual_requirement IS NOT NULL
 ),
-total_days_cte AS (
-    SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(interval_end, (select db_creation_date from highest)) - interval_start))/86400) as sum_total_days
-    FROM categorized_requirements
+-- 3. Pre-calculate days for each record
+days_calculated AS (
+    SELECT 
+        *,
+        EXTRACT(EPOCH FROM (COALESCE(interval_end, db_creation_date) - interval_start))/86400 as days
+    FROM filtered_requirements
+),
+-- 4. Calculate total days once
+total_days AS (
+    SELECT SUM(days) as sum_total_days
+    FROM days_calculated
 )
+-- 5. Final aggregation with pre-calculated values
 SELECT 
     requirement_type,
-        COUNT(*) as total_count,
-        COUNT(DISTINCT from_package_name || '|' || from_version || '|' || to_package_name) as unique_pkg_pkgver_dep_count,
-        COUNT(DISTINCT from_package_name || '|' || to_package_name) as unique_pkg_dep_count,
-        COUNT(DISTINCT from_package_name) as unique_pkg_count,
-        SUM(EXTRACT(EPOCH FROM (COALESCE(interval_end, (select db_creation_date from highest)) - interval_start))/86400) as total_days,
-        ROUND(100.0 * SUM(EXTRACT(EPOCH FROM (COALESCE(interval_end, (select db_creation_date from highest)) - interval_start))/86400) / 
-        (SELECT sum_total_days FROM total_days_cte), 2) as days_percentage
+    COUNT(*) as total_count,
+    COUNT(DISTINCT CONCAT_WS('|', from_package_name, from_version, to_package_name)) as unique_pkg_pkgver_dep_count,
+    COUNT(DISTINCT CONCAT_WS('|', from_package_name, to_package_name)) as unique_pkg_dep_count,
+    COUNT(DISTINCT from_package_name) as unique_pkg_count,
+    SUM(days) as total_days,
+    ROUND(100.0 * SUM(days) / NULLIF((SELECT sum_total_days FROM total_days), 0), 2) as days_percentage
 FROM 
-    categorized_requirements
+    days_calculated
 GROUP BY 
     requirement_type
 ORDER BY 
---     total_days DESC;        requirement_type        | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |            total_days            | days_percentage 
--- --------------------------------+-------------+-----------------------------+----------------------+------------------+----------------------------------+-----------------
---  floating - minor               |      387721 |                      202024 |                14790 |            12187 | 6432441.756400462962990126123338 |           45.59
---  pinned                         |      313195 |                      167490 |                10898 |             6921 | 4149005.904143518518514018771848 |           29.40
---  other                          |      122868 |                       55418 |                 7938 |             4006 | 2403922.457939814814819980831093 |           17.04
---  floating - patch               |       56301 |                       21923 |                 3024 |             2276 | 1076921.145821759259244772748519 |            7.63
---  floating - major - restrictive |        2421 |                        1165 |                  231 |              228 |       43628.55542824074073929994 |            0.31
---  floating - major               |         169 |                          53 |                   27 |               23 |    4335.390046296296295929640000 |            0.03
--- (6 rows)
+    total_days DESC;
+
+--   requirement_type  | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |            total_days            | days_percentage 
+-- --------------------+-------------+-----------------------------+----------------------+------------------+----------------------------------+-----------------
+--  floating-minor     |      377834 |                      197476 |                13907 |            11398 | 6224998.702025462963002667354452 |           44.12
+--  pinning            |      415430 |                      214692 |                17387 |             9927 | 6173670.000706018518522358466645 |           43.75
+--  floating-patch     |       48701 |                       18309 |                 2292 |             1647 |  879335.116655092592582027816297 |            6.23
+--  fixed-ranging      |       32998 |                       15786 |                 2762 |             2141 |  700966.093900462962949718897404 |            4.97
+--  at-most            |        6041 |                        2433 |                  470 |              427 |      114057.76657407407406752969 |            0.81
+--  complex-expression |        1484 |                         292 |                   67 |               60 |   14012.553020833333332011040000 |            0.10
+--  or-expression      |         177 |                          62 |                   16 |               16 |        3065.95626157407407372590 |            0.02
+--  not-expression     |          10 |                           8 |                    6 |                6 |         149.02063657407407408889 |            0.00
+-- (8 rows)
 
 
 
@@ -1199,7 +1124,7 @@ WHERE prev_is_out_of_date IS NOT NULL;
                                                                                                                       
                                           
 -- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---                       235 |                                                1023 |                                                  47168 |                                                     23018 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - major -> pinned, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
+--                       235 |                                                1023 |                                                  47168 |                                                     23018 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - major -> pinned, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - major - restrictive, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
 
 
 -- updated -> outdated, trending constraint type change
@@ -1347,8 +1272,8 @@ FROM version_transitions
 WHERE prev_is_out_of_date IS NOT NULL;
 
 --  dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    string_agg                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
--- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---                      5657 |                                                  75 |                                                5219238 |                                                     71190 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major - restrictive -> pinned, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - major - restrictive, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
+-- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+--                      5657 |                                                  75 |                                                5219238 |                                                     71190 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - major - restrictive, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
 
 
 -- outdated -> updated, trending constraint type change
@@ -1394,18 +1319,12 @@ ORDER BY
 --                 spec_type_transition                | transition_count 
 -- ----------------------------------------------------+------------------
 --  pinned -> floating - minor                         |            28338
---  floating - minor -> pinned                         |             9482
---  other -> floating - major                          |             7219
+--  floating - major -> other                          |             7219
 --  floating - patch -> floating - minor               |             5597
 --  floating - minor -> floating - major               |             3082
---  other -> floating - minor                          |             2959
 --  floating - patch -> floating - major               |             1875
 --  pinned -> floating - patch                         |             1728
 --  other -> floating - patch                          |             1718
---  floating - minor -> floating - major - restrictive |             1697
---  floating - patch -> other                          |             1665
---  floating - minor -> floating - patch               |             1315
---  floating - patch -> pinned                         |             1154
 --  floating - minor -> other                          |              958
 --  pinned -> floating - major                         |              531
 --  other -> floating - major - restrictive            |              385
@@ -1478,6 +1397,7 @@ SELECT
         WHEN is_exposed = true 
         AND prev_is_exposed = false 
         AND from_version != prev_from_version 
+        
         AND actual_requirement = prev_actual_requirement
         THEN 1 
     END) as pkg_releases_new_version_same_requirement_same_spec,
@@ -1512,7 +1432,7 @@ WHERE prev_is_exposed IS NOT NULL;
 
 --  dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                            string_agg                                                                                                                                                                                                                                                                                                                                                            
 -- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---                        29 |                                                1267 |                                                    558 |                                                      1138 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - major -> pinned, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - minor
+--                        29 |                                                1267 |                                                    558 |                                                      1138 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - minor
 
 
 

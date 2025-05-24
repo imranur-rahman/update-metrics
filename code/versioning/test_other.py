@@ -42,18 +42,18 @@ def classify_version_requirement(req):
         * "<=2.0.0"
         * "<1.26.0.dev0"
         
-    - range: Version range with both bounds
+    - fixed-ranging: Version range with both bounds
         * ">=1.2.3 <2.0.0"
         * ">1.0.0 <6.0.0"
         * "<2.8,>=2.4"
         * "1.0.0-2.0.0"
         * "<2.0.0dev,>=1.0.0"
         
-    - not: Version exclusion
+    - not-expression: Version exclusion
         * "!=1.2.3"
         * "!1.2.3"
         
-    - or-combination: Multiple version ranges
+    - or-expression: Multiple version ranges
         * "^1.2.0 || ^2.0.0"
         * ">= 1.2.3 || <= 1.2.4"
         * "11 || 12 || 13"
@@ -78,14 +78,14 @@ def classify_version_requirement(req):
     - Floating major: ^\*\.\*\.\*$ or ['*', 'latest', 'x', 'x.x', 'x.x.x']
       Matches: Wildcard patterns that allow any version
       
-    - Range: ^[<>]=?\s*\d+(\.\d+){0,2}(\s*,\s*|\s+)[<>]=?\s*\d+(\.\d+){0,2}$
+    - fixed-ranging: ^[<>]=?\s*\d+(\.\d+){0,2}(\s*,\s*|\s+)[<>]=?\s*\d+(\.\d+){0,2}$
       Matches: Lower and upper bounds with operators
     """
     req = str(req).strip().lower()
 
-    # OR-combination: prioritize early
+    # or-expression: prioritize early
     if '||' in req:
-        return 'or-combination'
+        return 'or-expression'
 
     # Floating-major
     if req in ['*', 'latest', 'x', 'x.x', 'x.x.x'] or \
@@ -115,18 +115,18 @@ def classify_version_requirement(req):
         (req.startswith('<=') and not any (op in req[2:] for op in ['>', '!', '*', '~', '^'])):
         return 'at-most'
 
-    # Range
+    # fixed-ranging
     if (
         re.match(r'^[<>]=?\s*\d+(\.\d+){0,2}(\s*,\s*|\s+)[<>]=?\s*\d+(\.\d+){0,2}$', req) or
         re.match(r'^\d+(\.\d+)?(\.\w+)?\s*-\s*\d+(\.\d+)?(\.\w+)?$', req) or
         # re.match(r'^[<>]=?\s*\d+(\.\d+){0,2}(\s+[<>]=?\s*\d+(\.\d+){0,2})+$', req)
         ('<' in req and '>' in req and not any(op in req for op in ['!', '*', '~', '^']))
     ):
-        return 'range'
+        return 'fixed-ranging'
 
-    # Not
+    # not-expression
     if re.match(r'^!?=?\d+(\.\d+){0,2}$', req) and req.startswith('!'):
-        return 'not'
+        return 'not-expression'
     
     # Pinning with pre-release or build metadata
     if re.match(r'^\d+(\.\d+){0,2}(-[\w\.-]+)?(\+[\w\.-]+)?$', req) or \
@@ -168,36 +168,36 @@ def run_spec_type_tests():
         '1.2.x': 'floating-patch',
         '>=1.2.3': 'floating-major',
         '<1.2.3': 'at-most',
-        '>=1.2.3 <2.0.0': 'range',
-        '>=1.2.3 <1.3.0': 'range',
-        '>1.0.0 <6': 'range',
-        '>1.0.0 <6.0': 'range', 
-        '>=1.2.3 <5.0.0': 'range',
-        '>2.0.0 <6.0.0': 'range',
-        '^1.2.0 || ^2.0.0': 'or-combination',
-        '>= 1.2.3 || <= 1.2.4': 'or-combination',
-        '>= 1.2.3 <= 1.2.4': 'range',
-        '<2.0.0 || >=1.2.3': 'or-combination',
+        '>=1.2.3 <2.0.0': 'fixed-ranging',
+        '>=1.2.3 <1.3.0': 'fixed-ranging',
+        '>1.0.0 <6': 'fixed-ranging',
+        '>1.0.0 <6.0': 'fixed-ranging', 
+        '>=1.2.3 <5.0.0': 'fixed-ranging',
+        '>2.0.0 <6.0.0': 'fixed-ranging',
+        '^1.2.0 || ^2.0.0': 'or-expression',
+        '>= 1.2.3 || <= 1.2.4': 'or-expression',
+        '>= 1.2.3 <= 1.2.4': 'fixed-ranging',
+        '<2.0.0 || >=1.2.3': 'or-expression',
         'npm:eslint-plugin-i@2.27.5-4': 'unclassified',
-        '<2.8,>=2.4': 'range',
-        '<2.16.0,>=2.6': 'range',
+        '<2.8,>=2.4': 'fixed-ranging',
+        '<2.16.0,>=2.6': 'fixed-ranging',
         '<=2.18.2': 'at-most',
         '==2.10.*': 'floating-patch',
         '==1.1.post2': 'pinning',
-        '>= 5.0.0 < 9.0.0': 'range',
-        '13.0.x || > 13.1.0 < 14.0.0': 'or-combination',
+        '>= 5.0.0 < 9.0.0': 'fixed-ranging',
+        '13.0.x || > 13.1.0 < 14.0.0': 'or-expression',
         '=0.8.x': 'floating-patch',
         '>= 6.x.x': 'floating-major',
-        '0.18 - 0.26 || ^0.26.0': 'or-combination',
+        '0.18 - 0.26 || ^0.26.0': 'or-expression',
         '7.*': 'floating-minor',
         '7.x': 'floating-minor',
-        '>=10 <= 11': 'range',
+        '>=10 <= 11': 'fixed-ranging',
         'v3.6.0-upgrade-to-lit.1': 'pinning',
-        '11 || 12 || 13': 'or-combination',
-        '>= 1.2.3 < 2.0.0': 'range',
-        '>=3 || >=3.0.0-beta': 'or-combination',
+        '11 || 12 || 13': 'or-expression',
+        '>= 1.2.3 < 2.0.0': 'fixed-ranging',
+        '>=3 || >=3.0.0-beta': 'or-expression',
         'v1.0.0': 'pinning',
-        '>1.1.2-dev <1.1.2-ropsten': 'range',
+        '>1.1.2-dev <1.1.2-ropsten': 'fixed-ranging',
         '0.6.X': 'floating-patch',
         '>=1.2.0,~=1.3': 'complex-expression',
         '~=1.3.0,<1.4': 'complex-expression',
@@ -213,13 +213,16 @@ def run_spec_type_tests():
         '=1.1': 'pinning',
         '=1.1.1': 'pinning',
         '=1.1.1.1': 'pinning',
-        '<3.0dev,>=1.25.0': 'range',
-        '<3.5.1,>=3.0.0b19': 'range',
+        '<3.0dev,>=1.25.0': 'fixed-ranging',
+        '<3.5.1,>=3.0.0b19': 'fixed-ranging',
         '==3.*': 'floating-minor',
-        '<2.0.0dev,>=1.0.0': 'range',
+        '<2.0.0dev,>=1.0.0': 'fixed-ranging',
         '~= 4.2': 'floating-patch',
-        '>=4.12.5.0,<5.0.0.0': 'range',
+        '>=4.12.5.0,<5.0.0.0': 'fixed-ranging',
         '<1.26.0.dev0': 'at-most',
+        '19.1.4 - 21': 'fixed-ranging',
+        '5.1.2 - 6.7.0': 'fixed-ranging',
+        '2 - 4': 'fixed-ranging',
     }
 
     failed_tests = []
