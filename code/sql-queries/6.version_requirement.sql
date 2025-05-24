@@ -720,112 +720,294 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Main function to determine spec type
-CREATE OR REPLACE FUNCTION get_spec_type(spec text)
-RETURNS text AS $$
-DECLARE
-    comps version_component[];
-    comp1 version_component;
-    comp2 version_component;
-BEGIN
-    -- Handle simple cases first
-    IF spec = '*' OR spec = 'latest' THEN
-        RETURN 'floating - major';
-    END IF;
+-- CREATE OR REPLACE FUNCTION get_spec_type(spec text)
+-- RETURNS text AS $$
+-- DECLARE
+--     comps version_component[];
+--     comp1 version_component;
+--     comp2 version_component;
+-- BEGIN
+--     -- Handle simple cases first
+--     IF spec = '*' OR spec = 'latest' OR spec = 'x' OR spec = 'x.x' OR spec = 'x.x.x' THEN
+--         RETURN 'floating - major';
+--     END IF;
     
-    IF spec LIKE '~%' THEN
-        RETURN 'floating - patch';
-    END IF;
+--     IF spec LIKE '~%' THEN
+--         RETURN 'floating - patch';
+--     END IF;
     
-    IF spec LIKE '^%' THEN
-        RETURN 'floating - minor';
-    END IF;
+--     IF spec LIKE '^%' THEN
+--         RETURN 'floating - minor';
+--     END IF;
 
-    -- Handle x-based patterns
-    IF spec ~ '^[0-9]+\.x\.x$' THEN
-        RETURN 'floating - minor';
-    END IF;
+--     -- Handle x-based patterns
+--     IF spec ~ '^[0-9]+\.x\.x$' THEN
+--         RETURN 'floating - minor';
+--     END IF;
 
-    IF spec ~ '^[0-9]+\.[0-9]+\.x$' THEN
-        RETURN 'floating - patch';
-    END IF;
+--     IF spec ~ '^[0-9]+\.[0-9]+\.x$' THEN
+--         RETURN 'floating - patch';
+--     END IF;
 
-    -- Parse version spec
-    comps := parse_version_spec(spec);
+--     -- Parse version spec
+--     comps := parse_version_spec(spec);
     
-    -- Handle single version component
-    IF array_length(comps, 1) = 1 THEN
-        IF comps[1].operator = '=' THEN
-            RETURN 'pinned';
-        ELSIF comps[1].operator LIKE '>' OR comps[1].operator = '>=' THEN
-            RETURN 'floating - major';
-        ELSIF comps[1].operator LIKE '<' OR comps[1].operator = '<=' THEN
-            RETURN 'other';
-        END IF;
-    END IF;
+--     -- Handle single version component
+--     IF array_length(comps, 1) = 1 THEN
+--         IF comps[1].operator = '=' THEN
+--             RETURN 'pinned';
+--         ELSIF comps[1].operator LIKE '>' OR comps[1].operator = '>=' THEN
+--             RETURN 'floating - major';
+--         ELSIF comps[1].operator LIKE '<' OR comps[1].operator = '<=' THEN
+--             RETURN 'other';
+--         END IF;
+--     END IF;
 
-    -- Handle version ranges
-    IF array_length(comps, 1) = 2 THEN
-        comp1 := comps[1];
-        comp2 := comps[2];
+--     -- Handle version ranges
+--     IF array_length(comps, 1) = 2 THEN
+--         comp1 := comps[1];
+--         comp2 := comps[2];
         
-        -- Check for floating - minor pattern FIRST
-        IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
-           (semver_major(comp2.version) = semver_major(comp1.version) + 1 OR 
-            semver_major(comp2.version) = semver_major(comp1.version)) AND
-           (semver_minor(comp2.version) = 0) AND
-           (semver_patch(comp2.version) = 0) THEN
-            RETURN 'floating - minor';
-        END IF;
+--         -- Check for floating - minor pattern FIRST
+--         IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
+--            (semver_major(comp2.version) = semver_major(comp1.version) + 1 OR 
+--             semver_major(comp2.version) = semver_major(comp1.version)) AND
+--            (semver_minor(comp2.version) = 0) AND
+--            (semver_patch(comp2.version) = 0) THEN
+--             RETURN 'floating - minor';
+--         END IF;
 
-        -- Check for floating - patch pattern
-        IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
-           (semver_major(comp2.version) = semver_major(comp1.version)) AND
-           (semver_minor(comp2.version) = semver_minor(comp1.version) + 1) AND
-           (semver_minor(comp2.version) != 0) AND
-           (semver_patch(comp2.version) = 0) THEN
-            RETURN 'floating - patch';
-        END IF;
+--         -- Check for floating - patch pattern
+--         IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
+--            (semver_major(comp2.version) = semver_major(comp1.version)) AND
+--            (semver_minor(comp2.version) = semver_minor(comp1.version) + 1) AND
+--            (semver_minor(comp2.version) != 0) AND
+--            (semver_patch(comp2.version) = 0) THEN
+--             RETURN 'floating - patch';
+--         END IF;
 
-        -- Check for floating - major - restrictive pattern
-        IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
-           (semver_major(comp2.version) > semver_major(comp1.version) + 1) THEN
-            RETURN 'floating - major - restrictive';
-        END IF;
-    END IF;
+--         -- Check for floating - major - restrictive pattern
+--         IF (comp1.operator LIKE '>%' AND comp2.operator LIKE '<%') AND
+--            (semver_major(comp2.version) > semver_major(comp1.version) + 1) THEN
+--             RETURN 'floating - major - restrictive';
+--         END IF;
+--     END IF;
 
-    RETURN 'other';
-EXCEPTION 
-    WHEN OTHERS THEN
-        RETURN 'other';
-END;
-$$ LANGUAGE plpgsql;
+--     RETURN 'other';
+-- EXCEPTION 
+--     WHEN OTHERS THEN
+--         RETURN 'other';
+-- END;
+-- $$ LANGUAGE plpgsql;
+
+
 
 
 -- Test cases
-SELECT get_spec_type('*');                    -- 'floating - major'
-SELECT get_spec_type('latest');               -- 'floating - major'
-SELECT get_spec_type('~1.2.3');               -- 'floating - patch'
-SELECT get_spec_type('^1.2.3');               -- 'floating - minor'
-SELECT get_spec_type('1.2.3');                -- 'pinned'
-SELECT get_spec_type('1.x.x');                -- 'floating - minor'
-SELECT get_spec_type('1.2.x');                -- 'floating - patch'      
-SELECT get_spec_type('>=1.2.3');              -- 'floating - major'
-SELECT get_spec_type('<1.2.3');               -- 'other'
-SELECT parse_version_spec('>=1.2.3 <2.0.0');  -- {"(>=,1.2.3)","(<,2.0.0)"}
-SELECT get_spec_type('>=1.2.3 <2.0.0');       -- 'floating - minor'
-SELECT get_spec_type('>=1.2.3 <1.3.0');       -- 'floating - patch'
-SELECT get_spec_type('>1.0.0 <6');            -- 'floating - major - restrictive'
-SELECT get_spec_type('>1.0.0 <6.0');        -- 'floating - major - restrictive'
-SELECT get_spec_type('>=1.2.3 <5.0.0');       -- 'floating - major - restrictive'
-SELECT get_spec_type('>2.0.0 <6.0.0');        -- 'floating - major - restrictive'
-SELECT get_spec_type('^1.2.0 || ^2.0.0');     -- it should be 'other', but the current version is returning 'floating - minor'
-SELECT get_spec_type('>= 1.2.3 || <= 1.2.4'); -- "other"
-SELECT get_spec_type('>= 1.2.3 <= 1.2.4');    -- "other"
-SELECT get_spec_type('<2.0.0 || >=1.2.3');    -- "floating - minor"
-SELECT get_spec_type('npm:eslint-plugin-i@2.27.5-4'); -- "other"
+-- SELECT get_spec_type('*');                    -- 'floating - major'
+-- SELECT get_spec_type('latest');               -- 'floating - major'
+-- SELECT get_spec_type('~1.2.3');               -- 'floating - patch'
+-- SELECT get_spec_type('^1.2.3');               -- 'floating - minor'
+-- SELECT get_spec_type('1.2.3');                -- 'pinned'
+-- SELECT get_spec_type('1.x.x');                -- 'floating - minor'
+-- SELECT get_spec_type('1.2.x');                -- 'floating - patch'      
+-- SELECT get_spec_type('>=1.2.3');              -- 'floating - major'
+-- SELECT get_spec_type('<1.2.3');               -- 'other'
+-- SELECT parse_version_spec('>=1.2.3 <2.0.0');  -- {"(>=,1.2.3)","(<,2.0.0)"}
+-- SELECT get_spec_type('>=1.2.3 <2.0.0');       -- 'floating - minor'
+-- SELECT get_spec_type('>=1.2.3 <1.3.0');       -- 'floating - patch'
+-- SELECT get_spec_type('>1.0.0 <6');            -- 'floating - major - restrictive'
+-- SELECT get_spec_type('>1.0.0 <6.0');        -- 'floating - major - restrictive'
+-- SELECT get_spec_type('>=1.2.3 <5.0.0');       -- 'floating - major - restrictive'
+-- SELECT get_spec_type('>2.0.0 <6.0.0');        -- 'floating - major - restrictive'
+-- SELECT get_spec_type('^1.2.0 || ^2.0.0');     -- it should be 'other', but the current version is returning 'floating - minor'
+-- SELECT get_spec_type('>= 1.2.3 || <= 1.2.4'); -- "other"
+-- SELECT get_spec_type('>= 1.2.3 <= 1.2.4');    -- "other"
+-- SELECT get_spec_type('<2.0.0 || >=1.2.3');    -- "floating - minor"
+-- SELECT get_spec_type('npm:eslint-plugin-i@2.27.5-4'); -- "other"
+
+
+-- SELECT get_spec_type('<2.8,>=2.4');
+-- SELECT get_spec_type('<2.16.0,>=2.6');
+-- SELECT get_spec_type('<=2.18.2');
+-- SELECT get_spec_type('==2.10.*');
+-- SELECT get_spec_type('==1.1.post2');
+-- SELECT get_spec_type('>= 5.0.0 < 9.0.0');
+-- SELECT get_spec_type('13.0.x || > 13.1.0 < 14.0.0');
+-- SELECT get_spec_type('=0.8.x');
+-- SELECT get_spec_type('>= 6.x.x');
+-- SELECT get_spec_type('0.18 - 0.26 || ^0.26.0');
+-- SELECT get_spec_type('7.*');
+-- SELECT get_spec_type('7.x');
+-- SELECT get_spec_type('>=10 <= 11');
+-- SELECT get_spec_type('v3.6.0-upgrade-to-lit.1');    
+-- SELECT get_spec_type('11 || 12 || 13');
+-- SELECT get_spec_type('>= 1.2.3 < 2.0.0');
+-- SELECT get_spec_type('>=3 || >=3.0.0-beta');    
+-- SELECT get_spec_type('v1.0.0');
+-- SELECT get_spec_type('>1.1.2-dev <1.1.2-ropsten');
+-- SELECT get_spec_type('0.6.X');
+-- SELECT get_spec_type('==1.0.0.dev11');
+-- SELECT get_spec_type('~=1.0.0.dev20');
+-- SELECT get_spec_type('>=1.3.0,~=1.3');
+-- SELECT get_spec_type('~=1.3,>=1.3.0');
+-- SELECT get_spec_type('~=1.3');
+-- SELECT get_spec_type('1.0.6-alpha.18494658a.0');
+-- SELECT get_spec_type('6.2.9-alpha-aa43054d.0');
+
+
+CREATE OR REPLACE FUNCTION get_spec_type(spec text)
+RETURNS text AS $$
+DECLARE
+    req text := lower(trim(spec));
+BEGIN
+
+    -- Handle null input
+    IF req IS NULL THEN
+        RETURN 'null';
+    END IF;
+
+    -- OR-combination: prioritize early
+    IF req LIKE '%||%' THEN
+        RETURN 'or-expression';
+    END IF;
+
+    -- Floating-major
+    IF req IN ('*', 'latest', 'x', 'x.x', 'x.x.x') OR req ~ '^\*\.\*\.\*$' OR
+          (req LIKE '>=%' AND NOT req ~ '[<>=!*]' AND substring(req from 3) !~ '[<>=!*]') OR
+          (req LIKE '>%' AND NOT req ~ '[<>=!*]' AND substring(req from 2) !~ '[<>=!*]') THEN
+        RETURN 'floating-major';
+    END IF;
+
+    -- Floating-patch
+    IF req ~ '^=?=?\d+\.\d+\.x$' OR req ~ '^=?=?\d+\.\d+\.\*$' OR req ~ '^\d+\.\d+\.x$' OR
+          (req LIKE '~%' AND req NOT LIKE '%,%') THEN
+        RETURN 'floating-patch';
+    END IF;
+
+    -- Floating-minor
+    IF req ~ '^=?=?\d+\.x(\.x)?$' OR req ~ '^=?=?\d+\.\*(\.\*)?$' OR req ~ '^x\.\*$' OR req LIKE '^%' THEN
+        RETURN 'floating-minor';
+    END IF;
+
+    -- Pinning: simple versions with no operators
+    IF req ~ '^[\w\.\-\+]+' AND req !~ '[<>=!*x]' THEN
+        RETURN 'pinning';
+    END IF;
+
+    -- At-most
+    IF req ~ '^<=?\s*\d+(\.\d+){0,2}(-[a-z0-9]+)?$' OR
+          (req LIKE '<%' AND substring(req from 2) !~ '[=>!*~^]') OR
+          (req LIKE '<=%' AND substring(req from 3) !~ '[>!*~^]') THEN
+        RETURN 'at-most';
+    END IF;
+
+    -- Range
+    IF req ~ '^[<>]=?\s*\d+(\.\d+){0,2}(\s*,\s*|\s+)[<>]=?\s*\d+(\.\d+){0,2}$' OR
+          req ~ '^\d+(\.\d+)?(\.\w+)?\s*-\s*\d+(\.\d+)?(\.\w+)?$' OR
+          (req LIKE '%<%' AND req LIKE '%>%' AND req !~ '[!*~^]') THEN
+        RETURN 'fixed-ranging';
+    END IF;
+
+    -- Not
+    IF req ~ '^!?=?\d+(\.\d+){0,2}$' AND req LIKE '!%' THEN
+        RETURN 'not-expression';
+    END IF;
+
+    -- Pinning with metadata or pre-release
+    IF req ~ '^\d+(\.\d+){0,2}(-[\w\.-]+)?(\+[\w\.-]+)?$' OR
+          ((req LIKE '=%' OR req LIKE '==%') AND req !~ '[<>\*!~^]') THEN
+        RETURN 'pinning';
+    END IF;
+
+    -- Complex expression
+    IF req ~ '[<>=!~^]' THEN
+        RETURN 'complex-expression';
+    END IF;
+
+    -- Final fallback pinning (e.g., bare version with optional metadata)
+    IF req ~ '^\d+(\.\d+){0,2}(-[\w\.-]+)?(\+[\w\.-]+)?$' THEN
+        RETURN 'pinning';
+    END IF;
+
+    RETURN 'unclassified';
+END;
+$$ LANGUAGE plpgsql;
 
 -- Example usage:
 COMMENT ON FUNCTION get_spec_type(text) IS 'Determines the type of version specification (pinned, floating patch/minor/major)';
+
+
+-- testing
+-- Step 1: Create a temporary table to store test inputs
+DROP TABLE IF EXISTS test_spec_types;
+CREATE TEMP TABLE test_spec_types (
+    case_id INTEGER,
+    spec TEXT,
+    detected_type TEXT
+);
+
+-- Step 2: Insert all test cases and capture output
+INSERT INTO test_spec_types (case_id, spec, detected_type)
+VALUES
+(1,  '*',                    get_spec_type('*')),
+(2,  'latest',               get_spec_type('latest')),
+(3,  '~1.2.3',               get_spec_type('~1.2.3')),
+(4,  '^1.2.3',               get_spec_type('^1.2.3')),
+(5,  '1.2.3',                get_spec_type('1.2.3')),
+(6,  '1.x.x',                get_spec_type('1.x.x')),
+(7,  '1.2.x',                get_spec_type('1.2.x')),
+(8,  '>=1.2.3',              get_spec_type('>=1.2.3')),
+(9,  '<1.2.3',               get_spec_type('<1.2.3')),
+(10, '>=1.2.3 <2.0.0',       get_spec_type('>=1.2.3 <2.0.0')),
+(11, '>=1.2.3 <1.3.0',       get_spec_type('>=1.2.3 <1.3.0')),
+(12, '>1.0.0 <6',            get_spec_type('>1.0.0 <6')),
+(13, '>1.0.0 <6.0',          get_spec_type('>1.0.0 <6.0')),
+(14, '>=1.2.3 <5.0.0',       get_spec_type('>=1.2.3 <5.0.0')),
+(15, '>2.0.0 <6.0.0',        get_spec_type('>2.0.0 <6.0.0')),
+(16, '^1.2.0 || ^2.0.0',     get_spec_type('^1.2.0 || ^2.0.0')),
+(17, '>= 1.2.3 || <= 1.2.4', get_spec_type('>= 1.2.3 || <= 1.2.4')),
+(18, '>= 1.2.3 <= 1.2.4',    get_spec_type('>= 1.2.3 <= 1.2.4')),
+(19, '<2.0.0 || >=1.2.3',    get_spec_type('<2.0.0 || >=1.2.3')),
+(20, 'npm:eslint-plugin-i@2.27.5-4', get_spec_type('npm:eslint-plugin-i@2.27.5-4')),
+(21, '<2.8,>=2.4',           get_spec_type('<2.8,>=2.4')),
+(22, '<2.16.0,>=2.6',        get_spec_type('<2.16.0,>=2.6')),
+(23, '<=2.18.2',             get_spec_type('<=2.18.2')),
+(24, '==2.10.*',             get_spec_type('==2.10.*')),
+(25, '==1.1.post2',          get_spec_type('==1.1.post2')),
+(26, '>= 5.0.0 < 9.0.0',     get_spec_type('>= 5.0.0 < 9.0.0')),
+(27, '13.0.x || > 13.1.0 < 14.0.0', get_spec_type('13.0.x || > 13.1.0 < 14.0.0')),
+(28, '=0.8.x',               get_spec_type('=0.8.x')),
+(29, '>= 6.x.x',             get_spec_type('>= 6.x.x')),
+(30, '0.18 - 0.26 || ^0.26.0', get_spec_type('0.18 - 0.26 || ^0.26.0')),
+(31, '7.*',                  get_spec_type('7.*')),
+(32, '7.x',                  get_spec_type('7.x')),
+(33, '>=10 <= 11',           get_spec_type('>=10 <= 11')),
+(34, 'v3.6.0-upgrade-to-lit.1', get_spec_type('v3.6.0-upgrade-to-lit.1')),
+(35, '11 || 12 || 13',       get_spec_type('11 || 12 || 13')),
+(36, '>= 1.2.3 < 2.0.0',     get_spec_type('>= 1.2.3 < 2.0.0')),
+(37, '>=3 || >=3.0.0-beta',  get_spec_type('>=3 || >=3.0.0-beta')),
+(38, 'v1.0.0',               get_spec_type('v1.0.0')),
+(39, '>1.1.2-dev <1.1.2-ropsten', get_spec_type('>1.1.2-dev <1.1.2-ropsten')),
+(40, '0.6.X',                get_spec_type('0.6.X')),
+(41, '==1.0.0.dev11',        get_spec_type('==1.0.0.dev11')),
+(42, '~=1.0.0.dev20',        get_spec_type('~=1.0.0.dev20')),
+(43, '>=1.3.0,~=1.3',        get_spec_type('>=1.3.0,~=1.3')),
+(44, '~=1.3,>=1.3.0',        get_spec_type('~=1.3,>=1.3.0')),
+(45, '~=1.3',                get_spec_type('~=1.3')),
+(46, '1.0.6-alpha.18494658a.0', get_spec_type('1.0.6-alpha.18494658a.0')),
+(47, '6.2.9-alpha-aa43054d.0',  get_spec_type('6.2.9-alpha-aa43054d.0'));
+
+-- Step 3: Display results
+SELECT * FROM test_spec_types ORDER BY case_id;
+
+
+UPDATE relations_minified
+SET requirement_type = get_spec_type(actual_requirement)
+WHERE actual_requirement IS NOT NULL
+AND is_regular = true;
+
+CREATE INDEX relations_index_4 ON relations_minified (requirement_type);
 
 
 
@@ -1169,7 +1351,7 @@ WHERE prev_is_out_of_date IS NOT NULL;
 --                      5657 |                                                  75 |                                                5219238 |                                                     71190 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major - restrictive -> pinned, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - major - restrictive, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
 
 
--- updated -> outdated, trending constraint type change
+-- outdated -> updated, trending constraint type change
 WITH version_transitions AS (
     SELECT 
         system_name,
