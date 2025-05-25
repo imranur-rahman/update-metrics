@@ -38,16 +38,16 @@ ALTER TABLE relations_minified_versioning
 ADD COLUMN requirement_type VARCHAR(50);
 
 -- probably don't need this since relations_minified already has the column
-UPDATE relations_minified_versioning
-SET requirement_type = CASE
-    -- WHEN actual_requirement IS NULL THEN 'null' -- this is case won't occur
-    WHEN get_spec_type(actual_requirement) = 'pinned' THEN 'pinned'
-    WHEN get_spec_type(actual_requirement) = 'floating - major' THEN 'floating - major'
-    WHEN get_spec_type(actual_requirement) = 'floating - major - restrictive' THEN 'floating - major - restrictive'
-    WHEN get_spec_type(actual_requirement) = 'floating - minor' THEN 'floating - minor'
-    WHEN get_spec_type(actual_requirement) = 'floating - patch' THEN 'floating - patch'
-    ELSE 'other'
-END;
+-- UPDATE relations_minified_versioning
+-- SET requirement_type = CASE
+--     -- WHEN actual_requirement IS NULL THEN 'null' -- this is case won't occur
+--     WHEN get_spec_type(actual_requirement) = 'pinned' THEN 'pinned'
+--     WHEN get_spec_type(actual_requirement) = 'floating - major' THEN 'floating - major'
+--     WHEN get_spec_type(actual_requirement) = 'floating - major - restrictive' THEN 'floating - major - restrictive'
+--     WHEN get_spec_type(actual_requirement) = 'floating - minor' THEN 'floating - minor'
+--     WHEN get_spec_type(actual_requirement) = 'floating - patch' THEN 'floating - patch'
+--     ELSE 'other'
+-- END;
 -- UPDATE 1559743
 
 -- not needed anymore

@@ -1057,12 +1057,16 @@ ORDER BY
 
 
 
--- updated -> outdated, count the four ways
--- why a package goes into outdated dependency version
--- from is_out_of_date = false to is_out_of_date = true
 
 
-WITH version_transitions AS (
+
+
+
+
+-- RQ2
+-- Create a comprehensive materialized view for all transition analyses
+CREATE MATERIALIZED VIEW mv_all_version_transitions AS
+WITH base_transitions AS (
     SELECT 
         system_name,
         from_package_name,
@@ -1072,592 +1076,369 @@ WITH version_transitions AS (
         to_version,
         interval_start,
         is_out_of_date,
+        is_exposed,
+        requirement_type,
+        -- Calculate all LAG values in one pass
         LAG(is_out_of_date) OVER w as prev_is_out_of_date,
+        LAG(is_exposed) OVER w as prev_is_exposed,
         LAG(from_version) OVER w as prev_from_version,
         LAG(to_version) OVER w as prev_to_version,
         LAG(actual_requirement) OVER w as prev_actual_requirement,
-        requirement_type as current_spec_type,
         LAG(requirement_type) OVER w as prev_spec_type
     FROM relations_minified
-    WHERE is_regular = true
+    WHERE 
+        is_regular = true
         AND actual_requirement IS NOT NULL
     WINDOW w AS (
         PARTITION BY system_name, from_package_name, to_package_name 
         ORDER BY interval_start
     )
 )
+SELECT *,
+    -- Pre-calculate all transition conditions
+    CASE 
+        WHEN is_out_of_date = true AND prev_is_out_of_date = false THEN 'updated_to_outdated'
+        WHEN is_out_of_date = false AND prev_is_out_of_date = true THEN 'outdated_to_updated'
+        ELSE NULL
+    END as outdated_transition,
+    
+    CASE 
+        WHEN is_exposed = true AND prev_is_exposed = false THEN 'safe_to_vulnerable'
+        WHEN is_exposed = false AND prev_is_exposed = true THEN 'vulnerable_to_safe'
+        ELSE NULL
+    END as vulnerability_transition,
+    
+    -- Pre-calculate change types
+    CASE 
+        WHEN from_version = prev_from_version AND to_version != prev_to_version 
+        THEN 'dep_new_version'
+        WHEN from_version != prev_from_version AND actual_requirement = prev_actual_requirement 
+        THEN 'pkg_new_version_same_req'
+        WHEN from_version != prev_from_version AND actual_requirement != prev_actual_requirement AND requirement_type = prev_spec_type 
+        THEN 'pkg_new_version_changed_req_same_spec'
+        WHEN from_version != prev_from_version AND actual_requirement != prev_actual_requirement AND requirement_type != prev_spec_type 
+        THEN 'pkg_new_version_changed_req_changed_spec'
+        ELSE NULL
+    END as change_type,
+    
+    -- Pre-calculate spec transitions
+    CASE 
+        WHEN requirement_type != prev_spec_type 
+        THEN prev_spec_type || ' -> ' || requirement_type 
+        ELSE NULL 
+    END as spec_transition
+    
+FROM base_transitions
+WHERE prev_is_out_of_date IS NOT NULL OR prev_is_exposed IS NOT NULL;
+-- SELECT 87128294
+
+-- Create strategic indexes
+CREATE INDEX idx_mv_transitions_outdated ON mv_all_version_transitions(outdated_transition, change_type);
+CREATE INDEX idx_mv_transitions_vuln ON mv_all_version_transitions(vulnerability_transition, change_type);
+CREATE INDEX idx_mv_transitions_spec ON mv_all_version_transitions(spec_transition);
+
+
+
+
+
+
+-- Query 1: Updated -> Outdated (4 ways)
 SELECT 
-    COUNT(CASE 
-        WHEN is_out_of_date = true 
-        AND prev_is_out_of_date = false 
-        AND from_version = prev_from_version
-        AND to_version != prev_to_version
-        THEN 1 
-    END) as dep_releases_new_version,
-    COUNT(CASE 
-        WHEN is_out_of_date = true 
-        AND prev_is_out_of_date = false 
-        AND from_version != prev_from_version 
-        AND actual_requirement = prev_actual_requirement
-        THEN 1 
-    END) as pkg_releases_new_version_same_requirement_same_spec,
-    COUNT(CASE 
-        WHEN is_out_of_date = true 
-        AND prev_is_out_of_date = false 
-        AND from_version != prev_from_version 
-        AND actual_requirement != prev_actual_requirement
-        AND current_spec_type = prev_spec_type
-        THEN 1 
-    END) as pkg_releases_new_version_changed_requirement_same_spec,
-    COUNT(CASE 
-        WHEN is_out_of_date = true 
-        AND prev_is_out_of_date = false 
-        AND from_version != prev_from_version 
-        AND actual_requirement != prev_actual_requirement
-        AND current_spec_type != prev_spec_type
-        THEN 1 
-    END) as pkg_releases_new_version_changed_requirement_changed_spec,
-    STRING_AGG(DISTINCT CASE 
-        WHEN is_out_of_date = true 
-        AND prev_is_out_of_date = false 
-        AND from_version != prev_from_version 
-        AND current_spec_type != prev_spec_type
-        THEN prev_spec_type || ' -> ' || current_spec_type 
-    END, ', ')
-FROM version_transitions
-WHERE prev_is_out_of_date IS NOT NULL;
--- possible ways to improve when the first time dep was introduced and 
--- checking whether it was outdated or not.
+    COUNT(*) FILTER (WHERE change_type = 'dep_new_version') as dep_releases_new_version,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_same_req') as pkg_releases_new_version_same_requirement_same_spec,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_changed_req_same_spec') as pkg_releases_new_version_changed_requirement_same_spec,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_changed_req_changed_spec') as pkg_releases_new_version_changed_requirement_changed_spec,
+    STRING_AGG(DISTINCT spec_transition, ', ' ORDER BY spec_transition) FILTER (WHERE change_type = 'pkg_new_version_changed_req_changed_spec') as transitions
+FROM mv_all_version_transitions
+WHERE outdated_transition = 'updated_to_outdated';
 
--- dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_req
--- uirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                      
-                                                                                                                      
-                                                                                                                      
-                                                                                                                      
---                                                         string_agg                                                    
-                                                                                                                      
-                                                                                                                      
-                                                                                                                      
-                                          
--- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---                       235 |                                                1023 |                                                  47168 |                                                     23018 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - major -> pinned, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - major - restrictive, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
+-- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+--                       246 |                                                1016 |                                                  47795 |                                                     22887 | at-most -> fixed-ranging, at-most -> floating-minor, at-most -> floating-patch, at-most -> pinning, complex-expression -> at-most, complex-expression -> fixed-ranging, complex-expression -> floating-patch, complex-expression -> not-expression, complex-expression -> pinning, fixed-ranging -> at-most, fixed-ranging -> complex-expression, fixed-ranging -> floating-minor, fixed-ranging -> floating-patch, fixed-ranging -> pinning, floating-major -> at-most, floating-major -> complex-expression, floating-major -> fixed-ranging, floating-major -> floating-minor, floating-major -> floating-patch, floating-major -> not-expression, floating-major -> or-expression, floating-major -> pinning, floating-minor -> at-most, floating-minor -> complex-expression, floating-minor -> fixed-ranging, floating-minor -> floating-patch, floating-minor -> or-expression, floating-minor -> pinning, floating-patch -> at-most, floating-patch -> complex-expression, floating-patch -> fixed-ranging, floating-patch -> floating-minor, floating-patch -> pinning, not-expression -> at-most, not-expression -> complex-expression, not-expression -> fixed-ranging, not-expression -> pinning, or-expression -> fixed-ranging, or-expression -> fl
+-- oating-minor, or-expression -> floating-patch, or-expression -> pinning, pinning -> at-most, pinning -> fixed-ranging,
+--  pinning -> floating-minor, pinning -> floating-patch
+-- (1 row)
 
-
--- updated -> outdated, trending constraint type change
--- pkg_releases_new_version_changed_requirement_changed_spec
-WITH version_transitions AS (
-    SELECT 
-        system_name,
-        from_package_name,
-        to_package_name,
-        from_version,
-        actual_requirement,
-        to_version,
-        interval_start,
-        is_out_of_date,
-        LAG(is_out_of_date) OVER w as prev_is_out_of_date,
-        LAG(from_version) OVER w as prev_from_version,
-        LAG(to_version) OVER w as prev_to_version,
-        LAG(actual_requirement) OVER w as prev_actual_requirement,
-        requirement_type as current_spec_type,
-        LAG(requirement_type) OVER w as prev_spec_type
-    FROM relations_minified
-    WHERE is_regular = true
-        AND actual_requirement IS NOT NULL
-    WINDOW w AS (
-        PARTITION BY system_name, from_package_name, to_package_name 
-        ORDER BY interval_start
-    )
-)
+-- Query 2: Updated -> Outdated (trending transitions)
 SELECT 
-    prev_spec_type || ' -> ' || current_spec_type as spec_type_transition,
+    spec_transition,
     COUNT(*) as transition_count
-FROM version_transitions
+FROM mv_all_version_transitions
 WHERE 
-    is_out_of_date = true 
-    AND prev_is_out_of_date = false 
-    AND from_version != prev_from_version 
-    AND actual_requirement != prev_actual_requirement
-    AND current_spec_type != prev_spec_type
-GROUP BY 
-    prev_spec_type, current_spec_type
-ORDER BY 
-    transition_count DESC;
+    outdated_transition = 'updated_to_outdated'
+    AND change_type = 'pkg_new_version_changed_req_changed_spec'
+    AND spec_transition IS NOT NULL
+GROUP BY spec_transition
+ORDER BY transition_count DESC;
 
---                 spec_type_transition                | transition_count 
--- ----------------------------------------------------+------------------
---  floating - minor -> pinned                         |            12716
---  floating - major -> other                          |             3521
---  floating - minor -> floating - patch               |             1808
---  floating - major -> floating - minor               |             1500
---  floating - minor -> other                          |             1112
---  floating - major -> floating - patch               |              701
---  floating - major -> pinned                         |              349
---  floating - patch -> pinned                         |              288
---  floating - major -> floating - major - restrictive |              283
---  pinned -> floating - minor                         |              243
---  floating - patch -> other                          |              202
---  floating - patch -> floating - minor               |               55
---  floating - major - restrictive -> other            |               44
---  other -> floating - minor                          |               39
---  other -> floating - patch                          |               37
---  pinned -> floating - patch                         |               34
---  other -> pinned                                    |               33
---  floating - major - restrictive -> floating - minor |               31
---  pinned -> other                                    |               15
---  floating - major - restrictive -> floating - patch |                7
---  floating - minor -> floating - major               |                4
---  other -> floating - major                          |                4
---  floating - minor -> floating - major - restrictive |                2
---  floating - patch -> floating - major               |                1
---  other -> floating - major - restrictive            |                1
---  floating - major - restrictive -> floating - major |                1
--- (26 rows)
+--           spec_transition            | transition_count 
+-- --------------------------------------+------------------
+--  floating-minor -> pinning            |            12853
+--  floating-major -> fixed-ranging      |             2739
+--  floating-major -> pinning            |             2243
+--  floating-minor -> floating-patch     |             1630
+--  fixed-ranging -> pinning             |              660
+--  floating-major -> floating-minor     |              579
+--  floating-major -> floating-patch     |              392
+--  floating-major -> at-most            |              385
+--  floating-patch -> pinning            |              362
+--  pinning -> floating-minor            |              235
+--  floating-major -> complex-expression |              167
+--  floating-minor -> fixed-ranging      |               72
+--  fixed-ranging -> at-most             |               60
+--  floating-patch -> floating-minor     |               51
+--  fixed-ranging -> complex-expression  |               46
+--  floating-minor -> at-most            |               39
+--  floating-patch -> fixed-ranging      |               38
+--  floating-major -> or-expression      |               33
+--  pinning -> floating-patch            |               33
+--  fixed-ranging -> floating-patch      |               29
+--  complex-expression -> fixed-ranging  |               25
+--  or-expression -> floating-minor      |               25
+--  pinning -> fixed-ranging             |               25
+--  pinning -> at-most                   |               23
+--  floating-patch -> complex-expression |               22
+--  floating-patch -> at-most            |               14
+--  at-most -> pinning                   |               13
+--  complex-expression -> pinning        |               12
+--  floating-minor -> or-expression      |               12
+--  not-expression -> complex-expression |               11
+--  complex-expression -> floating-patch |               10
+--  fixed-ranging -> floating-minor      |                8
+--  or-expression -> pinning             |                7
+--  not-expression -> at-most            |                6
+--  not-expression -> pinning            |                5
+--  at-most -> fixed-ranging             |                5
+--  complex-expression -> at-most        |                4
+--  not-expression -> fixed-ranging      |                3
+--  or-expression -> floating-patch      |                3
+--  or-expression -> fixed-ranging       |                2
+--  floating-major -> not-expression     |                2
+--  floating-minor -> complex-expression |                1
+--  at-most -> floating-patch            |                1
+--  complex-expression -> not-expression |                1
+--  at-most -> floating-minor            |                1
+-- (45 rows)
 
 
 
-
-
-
- -- outdated -> updated, count the four ways
--- from is_out_of_date = true to is_out_of_date = false
-
-WITH version_transitions AS (
-    SELECT 
-        system_name,
-        from_package_name,
-        to_package_name,
-        from_version,
-        actual_requirement,
-        to_version,
-        interval_start,
-        is_out_of_date,
-        LAG(is_out_of_date) OVER w as prev_is_out_of_date,
-        LAG(from_version) OVER w as prev_from_version,
-        LAG(to_version) OVER w as prev_to_version,
-        LAG(actual_requirement) OVER w as prev_actual_requirement,
-        requirement_type as current_spec_type,
-        LAG(requirement_type) OVER w as prev_spec_type
-    FROM relations_minified
-    WHERE is_regular = true
-        AND actual_requirement IS NOT NULL
-    WINDOW w AS (
-        PARTITION BY system_name, from_package_name, to_package_name 
-        ORDER BY interval_start
-    )
-)
+-- Query 3: Outdated -> Updated (4 ways)
 SELECT 
-    COUNT(CASE 
-        WHEN is_out_of_date = false 
-        AND prev_is_out_of_date = true
-        AND from_version = prev_from_version
-        AND to_version != prev_to_version
-        THEN 1 
-    END) as dep_releases_new_version,
-    COUNT(CASE 
-        WHEN is_out_of_date = false 
-        AND prev_is_out_of_date = true 
-        AND from_version != prev_from_version 
-        AND actual_requirement = prev_actual_requirement
-        THEN 1 
-    END) as pkg_releases_new_version_same_requirement_same_spec,
-    COUNT(CASE 
-        WHEN is_out_of_date = false 
-        AND prev_is_out_of_date = true 
-        AND from_version != prev_from_version 
-        AND actual_requirement != prev_actual_requirement
-        AND current_spec_type = prev_spec_type
-        THEN 1 
-    END) as pkg_releases_new_version_changed_requirement_same_spec,
-    COUNT(CASE 
-        WHEN is_out_of_date = false 
-        AND prev_is_out_of_date = true 
-        AND from_version != prev_from_version 
-        AND actual_requirement != prev_actual_requirement
-        AND current_spec_type != prev_spec_type
-        THEN 1 
-    END) as pkg_releases_new_version_changed_requirement_changed_spec,
-    STRING_AGG(DISTINCT CASE 
-        WHEN is_out_of_date = false 
-        AND prev_is_out_of_date = true 
-        AND from_version != prev_from_version 
-        AND current_spec_type != prev_spec_type
-        THEN prev_spec_type || ' -> ' || current_spec_type 
-    END, ', ')
-FROM version_transitions
-WHERE prev_is_out_of_date IS NOT NULL;
+    COUNT(*) FILTER (WHERE change_type = 'dep_new_version') as dep_releases_new_version,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_same_req') as pkg_releases_new_version_same_requirement_same_spec,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_changed_req_same_spec') as pkg_releases_new_version_changed_requirement_same_spec,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_changed_req_changed_spec') as pkg_releases_new_version_changed_requirement_changed_spec,
+    STRING_AGG(DISTINCT spec_transition, ', ' ORDER BY spec_transition) FILTER (WHERE change_type = 'pkg_new_version_changed_req_changed_spec') as transitions
+FROM mv_all_version_transitions
+WHERE outdated_transition = 'outdated_to_updated';
 
---  dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    string_agg                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
--- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---                      5657 |                                                  75 |                                                5219238 |                                                     71190 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - major - restrictive, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
+--  dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+-- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+--                      5645 |                                                  85 |                                                5222276 |                                                     67681 | at-most -> complex-expression, at-most -> fixed-ranging, at-most -> floating-major, at-most -> floating-minor, at-most -> floating-patch, at-most -> not-expression, at-most -> pinning, complex-expression -> at-most, complex-expression -> fixed-ranging, complex-expression -> floating-major, complex-expression -> floating-minor, complex-expression -> floating-patch, complex-expression -> not-expression, complex-expression -> pinning, fixed-ranging -> at-most, fixed-ranging -> complex-expression, fixed-ranging -> floating-major, fixed-ranging -> floating-minor, fixed-ranging -> floating-patch, fixed-ranging -> not-expression, fixed-ranging -> or-expression, fixed-ranging -> pinning, floating-major -> at-most, floating-major -> fixed-ranging, floating-major -> pinning, floating-minor -> at-most, floating-minor -> complex-expression, floating-minor -> fixed-ranging, floating-minor -> floating-major, floating-minor -> floating-patch, floating-minor -> or-expression, floating-minor -> pinning, floating-patch -> at-most, floating-patch -> complex-expression, floating-patch -> fixed-ranging, floating-patch -> floating-major, floating-patch -> floating-minor, floating-patch -> or-expression, floating-patch -> pinning, not-expression -> floating-major, not-expression -> pinning, or-expression -> fixed-ranging, or-expression -> floating-major, or-expression -> floating-minor, or-expression -> floating-patch, or-expression -> pinning, pinning -> at-most, pinning -> complex-expression, pinning -> fixed-ranging, pinning -> floating-major, pinning -> floating-minor, pinning -> floating-patch, pinning -> not-expression, pinning -> or-expression
+-- (1 row)
 
-
--- outdated -> updated, trending constraint type change
-WITH version_transitions AS (
-    SELECT 
-        system_name,
-        from_package_name,
-        to_package_name,
-        from_version,
-        actual_requirement,
-        to_version,
-        interval_start,
-        is_out_of_date,
-        LAG(is_out_of_date) OVER w as prev_is_out_of_date,
-        LAG(from_version) OVER w as prev_from_version,
-        LAG(to_version) OVER w as prev_to_version,
-        LAG(actual_requirement) OVER w as prev_actual_requirement,
-        requirement_type as current_spec_type,
-        LAG(requirement_type) OVER w as prev_spec_type
-    FROM relations_minified
-    WHERE is_regular = true
-        AND actual_requirement IS NOT NULL
-    WINDOW w AS (
-        PARTITION BY system_name, from_package_name, to_package_name 
-        ORDER BY interval_start
-    )
-)
+-- Query 4: Outdated -> Updated (trending transitions)
 SELECT 
-    prev_spec_type || ' -> ' || current_spec_type as spec_type_transition,
+    spec_transition,
     COUNT(*) as transition_count
-FROM version_transitions
+FROM mv_all_version_transitions
 WHERE 
-    is_out_of_date = false 
-    AND prev_is_out_of_date = true 
-    AND from_version != prev_from_version 
-    AND actual_requirement != prev_actual_requirement
-    AND current_spec_type != prev_spec_type
-GROUP BY 
-    prev_spec_type, current_spec_type
-ORDER BY 
-    transition_count DESC;
+    outdated_transition = 'outdated_to_updated'
+    AND change_type = 'pkg_new_version_changed_req_changed_spec'
+    AND spec_transition IS NOT NULL
+GROUP BY spec_transition
+ORDER BY transition_count DESC;
 
---                 spec_type_transition                | transition_count 
--- ----------------------------------------------------+------------------
---  pinned -> floating - minor                         |            28338
---  floating - major -> other                          |             7219
---  floating - patch -> floating - minor               |             5597
---  floating - minor -> floating - major               |             3082
---  floating - patch -> floating - major               |             1875
---  pinned -> floating - patch                         |             1728
---  other -> floating - patch                          |             1718
---  floating - minor -> other                          |              958
---  pinned -> floating - major                         |              531
---  other -> floating - major - restrictive            |              385
---  pinned -> other                                    |              341
---  floating - major - restrictive -> floating - major |              339
---  other -> pinned                                    |              271
---  floating - patch -> floating - major - restrictive |              223
---  floating - major - restrictive -> floating - minor |              150
---  floating - major - restrictive -> other            |               51
---  floating - major -> other                          |               42
---  floating - major - restrictive -> floating - patch |               20
---  floating - major -> floating - patch               |               13
---  floating - major -> floating - major - restrictive |               11
---  floating - major -> floating - minor               |                9
---  pinned -> floating - major - restrictive           |                6
---  floating - major - restrictive -> pinned           |                5
+--            spec_transition            | transition_count 
+-- --------------------------------------+------------------
+--  pinning -> floating-minor            |            28591
+--  floating-minor -> pinning            |             9424
+--  pinning -> floating-major            |             5448
+--  floating-patch -> floating-minor     |             4442
+--  fixed-ranging -> floating-major      |             4006
+--  pinning -> fixed-ranging             |             2721
+--  pinning -> floating-patch            |             2552
+--  floating-minor -> floating-major     |             1514
+--  floating-patch -> pinning            |             1281
+--  floating-patch -> floating-major     |             1251
+--  floating-minor -> floating-patch     |             1251
+--  floating-minor -> or-expression      |              818
+--  floating-patch -> fixed-ranging      |              740
+--  at-most -> floating-major            |              643
+--  fixed-ranging -> pinning             |              573
+--  floating-minor -> fixed-ranging      |              333
+--  fixed-ranging -> floating-patch      |              230
+--  at-most -> fixed-ranging             |              229
+--  floating-patch -> complex-expression |              218
+--  fixed-ranging -> floating-minor      |              166
+--  or-expression -> floating-minor      |              162
+--  fixed-ranging -> complex-expression  |              147
+--  pinning -> at-most                   |              110
+--  complex-expression -> fixed-ranging  |               90
+--  pinning -> or-expression             |               80
+--  or-expression -> pinning             |               79
+--  fixed-ranging -> at-most             |               79
+--  pinning -> complex-expression        |               75
+--  complex-expression -> floating-major |               69
+--  at-most -> floating-minor            |               61
+--  at-most -> pinning                   |               45
+--  complex-expression -> floating-patch |               39
+--  at-most -> floating-patch            |               35
+--  at-most -> complex-expression        |               31
+--  at-most -> not-expression            |               21
+--  floating-patch -> or-expression      |               19
+--  floating-patch -> at-most            |               17
+--  floating-minor -> at-most            |               13
+--  floating-minor -> complex-expression |               10
+--  complex-expression -> floating-minor |                9
+--  or-expression -> floating-patch      |                8
+--  or-expression -> floating-major      |                8
+--  fixed-ranging -> or-expression       |                6
+--  complex-expression -> at-most        |                6
+--  pinning -> not-expression            |                5
+--  or-expression -> fixed-ranging       |                5
+--  complex-expression -> pinning        |                5
+--  floating-major -> fixed-ranging      |                4
+--  floating-major -> pinning            |                3
+--  complex-expression -> not-expression |                3
+--  not-expression -> floating-major     |                3
+--  fixed-ranging -> not-expression      |                1
+--  not-expression -> pinning            |                1
+--  floating-major -> at-most            |                1
+-- (54 rows)
+
+
+
+-- Query 5: Safe -> Vulnerable (4 ways)
+SELECT 
+    COUNT(*) FILTER (WHERE change_type = 'dep_new_version') as dep_releases_new_version,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_same_req') as pkg_releases_new_version_same_requirement_same_spec,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_changed_req_same_spec') as pkg_releases_new_version_changed_requirement_same_spec,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_changed_req_changed_spec') as pkg_releases_new_version_changed_requirement_changed_spec,
+    STRING_AGG(DISTINCT spec_transition, ', ' ORDER BY spec_transition) FILTER (WHERE change_type = 'pkg_new_version_changed_req_changed_spec') as transitions
+FROM mv_all_version_transitions
+WHERE vulnerability_transition = 'safe_to_vulnerable';
+
+--  dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                                                                                                                 transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+-- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+--                        16 |                                                1271 |                                                    594 |                                                      1133 | at-most -> fixed-ranging, at-most -> pinning, complex-expression -> at-most, complex-expression -> fixed-ranging, complex-expression -> floating-patch, complex-expression -> pinning, fixed-ranging -> at-most, fixed-ranging -> complex-expression, fixed-ranging -> floating-patch, fixed-ranging -> pinning, floating-major -> at-most, floating-major -> complex-expression, floating-major -> fixed-ranging, floating-major -> floating-minor, floating-major -> floating-patch, floating-major -> pinning, floating-minor -> at-most, floating-minor -> fixed-ranging, floating-minor -> floating-patch, floating-minor -> or-expression, floating-minor -> pinning, floating-patch -> complex-expression, floating-patch -> fixed-ranging, floating-patch -> pinning, not-expression -> pinning, pinning -> at-most, pinning -> fixed-ranging, pinning -> floating-minor, pinning -> floating-patch
+-- (1 row)
+
+-- Query 6: Safe -> Vulnerable (trending transitions)
+SELECT 
+    spec_transition,
+    COUNT(*) as transition_count
+FROM mv_all_version_transitions
+WHERE 
+    vulnerability_transition = 'safe_to_vulnerable'
+    AND change_type = 'pkg_new_version_changed_req_changed_spec'
+    AND spec_transition IS NOT NULL
+GROUP BY spec_transition
+ORDER BY transition_count DESC;
+
+--            spec_transition            | transition_count 
+-- --------------------------------------+------------------
+--  floating-minor -> pinning            |              541
+--  floating-major -> pinning            |              199
+--  floating-major -> fixed-ranging      |              117
+--  fixed-ranging -> pinning             |               61
+--  floating-minor -> floating-patch     |               43
+--  floating-patch -> pinning            |               38
+--  pinning -> floating-minor            |               29
+--  floating-major -> floating-patch     |               23
+--  floating-major -> at-most            |               20
+--  floating-major -> floating-minor     |                9
+--  at-most -> pinning                   |                7
+--  floating-patch -> fixed-ranging      |                7
+--  fixed-ranging -> complex-expression  |                5
+--  at-most -> fixed-ranging             |                4
+--  pinning -> fixed-ranging             |                4
+--  floating-major -> complex-expression |                3
+--  fixed-ranging -> at-most             |                3
+--  complex-expression -> floating-patch |                3
+--  pinning -> floating-patch            |                3
+--  fixed-ranging -> floating-patch      |                3
+--  pinning -> at-most                   |                2
+--  floating-minor -> fixed-ranging      |                2
+--  complex-expression -> at-most        |                1
+--  complex-expression -> fixed-ranging  |                1
+--  not-expression -> pinning            |                1
+--  floating-minor -> at-most            |                1
+--  complex-expression -> pinning        |                1
+--  floating-minor -> or-expression      |                1
+--  floating-patch -> complex-expression |                1
 -- (29 rows)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
--- nonvulnerable -> vulnerable, count the four ways
--- why a package goes into exposed
--- from is_exposed = false to is_exposed = true
-
-
-WITH version_transitions AS (
-    SELECT 
-        system_name,
-        from_package_name,
-        to_package_name,
-        from_version,
-        actual_requirement,
-        to_version,
-        interval_start,
-        is_exposed,
-        LAG(is_exposed) OVER w as prev_is_exposed,
-        LAG(from_version) OVER w as prev_from_version,
-        LAG(to_version) OVER w as prev_to_version,
-        LAG(actual_requirement) OVER w as prev_actual_requirement,
-        requirement_type as current_spec_type,
-        LAG(requirement_type) OVER w as prev_spec_type
-    FROM relations_minified
-    WHERE is_regular = true
-        AND actual_requirement IS NOT NULL
-    WINDOW w AS (
-        PARTITION BY system_name, from_package_name, to_package_name 
-        ORDER BY interval_start
-    )
-)
+-- Query 7: Vulnerable -> Safe (4 ways)
 SELECT 
-    COUNT(CASE 
-        WHEN is_exposed = true 
-        AND prev_is_exposed = false 
-        AND from_version = prev_from_version
-        AND to_version != prev_to_version
-        THEN 1 
-    END) as dep_releases_new_version,
-    COUNT(CASE 
-        WHEN is_exposed = true 
-        AND prev_is_exposed = false 
-        AND from_version != prev_from_version 
-        
-        AND actual_requirement = prev_actual_requirement
-        THEN 1 
-    END) as pkg_releases_new_version_same_requirement_same_spec,
-    COUNT(CASE 
-        WHEN is_exposed = true 
-        AND prev_is_exposed = false 
-        AND from_version != prev_from_version 
-        AND actual_requirement != prev_actual_requirement
-        AND current_spec_type = prev_spec_type
-        THEN 1 
-    END) as pkg_releases_new_version_changed_requirement_same_spec,
-    COUNT(CASE 
-        WHEN is_exposed = true 
-        AND prev_is_exposed = false 
-        AND from_version != prev_from_version 
-        AND actual_requirement != prev_actual_requirement
-        AND current_spec_type != prev_spec_type
-        THEN 1 
-    END) as pkg_releases_new_version_changed_requirement_changed_spec,
-    STRING_AGG(DISTINCT CASE 
-        WHEN is_exposed = true 
-        AND prev_is_exposed = false 
-        AND from_version != prev_from_version 
-        AND current_spec_type != prev_spec_type
-        THEN prev_spec_type || ' -> ' || current_spec_type 
-    END, ', ')
-FROM version_transitions
-WHERE prev_is_exposed IS NOT NULL;
--- possible ways to improve when the first time dep was introduced and 
--- checking whether it was exposed or not.
+    COUNT(*) FILTER (WHERE change_type = 'dep_new_version') as dep_releases_new_version,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_same_req') as pkg_releases_new_version_same_requirement_same_spec,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_changed_req_same_spec') as pkg_releases_new_version_changed_requirement_same_spec,
+    COUNT(*) FILTER (WHERE change_type = 'pkg_new_version_changed_req_changed_spec') as pkg_releases_new_version_changed_requirement_changed_spec,
+    STRING_AGG(DISTINCT spec_transition, ', ' ORDER BY spec_transition) FILTER (WHERE change_type = 'pkg_new_version_changed_req_changed_spec') as transitions
+FROM mv_all_version_transitions
+WHERE vulnerability_transition = 'vulnerable_to_safe';
 
-
---  dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                            string_agg                                                                                                                                                                                                                                                                                                                                                            
--- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---                        29 |                                                1267 |                                                    558 |                                                      1138 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> floating - minor, floating - major -> floating - patch, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - minor
-
-
-
--- nonvulnerable -> vulnerable, trending constraint type change
-WITH version_transitions AS (
-    SELECT 
-        system_name,
-        from_package_name,
-        to_package_name,
-        from_version,
-        actual_requirement,
-        to_version,
-        interval_start,
-        is_exposed,
-        LAG(is_exposed) OVER w as prev_is_exposed,
-        LAG(from_version) OVER w as prev_from_version,
-        LAG(to_version) OVER w as prev_to_version,
-        LAG(actual_requirement) OVER w as prev_actual_requirement,
-        requirement_type as current_spec_type,
-        LAG(requirement_type) OVER w as prev_spec_type
-    FROM relations_minified
-    WHERE is_regular = true
-        AND actual_requirement IS NOT NULL
-    WINDOW w AS (
-        PARTITION BY system_name, from_package_name, to_package_name 
-        ORDER BY interval_start
-    )
-)
-SELECT 
-    prev_spec_type || ' -> ' || current_spec_type as spec_type_transition,
-    COUNT(*) as transition_count
-FROM version_transitions
-WHERE 
-    is_exposed = true 
-    AND prev_is_exposed = false 
-    AND from_version != prev_from_version 
-    AND actual_requirement != prev_actual_requirement
-    AND current_spec_type != prev_spec_type
-GROUP BY 
-    prev_spec_type, current_spec_type
-ORDER BY 
-    transition_count DESC;
-
---                 spec_type_transition                | transition_count 
--- ----------------------------------------------------+------------------
---  floating - minor -> pinned                         |              536
---  floating - major -> other                          |              274
---  floating - minor -> other                          |               84
---  floating - minor -> floating - patch               |               60
---  floating - major -> floating - patch               |               40
---  pinned -> floating - minor                         |               26
---  floating - patch -> pinned                         |               26
---  floating - major -> floating - minor               |               23
---  floating - patch -> other                          |               20
---  floating - major -> floating - major - restrictive |               19
---  floating - major -> pinned                         |                9
---  other -> pinned                                    |                8
---  other -> floating - patch                          |                7
---  floating - major - restrictive -> other            |                6
---  other -> floating - minor                          |                6
---  other -> floating - major - restrictive            |                2
---  floating - patch -> floating - minor               |                2
---  floating - major - restrictive -> floating - minor |                1
---  floating - patch -> floating - major - restrictive |                1
---  floating - major - restrictive -> floating - major |                1
--- (20 rows)
-
-
-
--- vulnerable -> nonvulnerable, count the four ways
--- from is_exposed = true to is_exposed = false
-
-WITH version_transitions AS (
-    SELECT 
-        system_name,
-        from_package_name,
-        to_package_name,
-        from_version,
-        actual_requirement,
-        to_version,
-        interval_start,
-        is_exposed,
-        LAG(is_exposed) OVER w as prev_is_exposed,
-        LAG(from_version) OVER w as prev_from_version,
-        LAG(to_version) OVER w as prev_to_version,
-        LAG(actual_requirement) OVER w as prev_actual_requirement,
-        requirement_type as current_spec_type,
-        LAG(requirement_type) OVER w as prev_spec_type
-    FROM relations_minified
-    WHERE is_regular = true
-        AND actual_requirement IS NOT NULL
-    WINDOW w AS (
-        PARTITION BY system_name, from_package_name, to_package_name 
-        ORDER BY interval_start
-    )
-)
-SELECT 
-    COUNT(CASE 
-        WHEN is_exposed = false 
-        AND prev_is_exposed = true 
-        AND from_version = prev_from_version
-        AND to_version != prev_to_version
-        THEN 1 
-    END) as dep_releases_new_version,
-    COUNT(CASE 
-        WHEN is_exposed = false 
-        AND prev_is_exposed = true 
-        AND from_version != prev_from_version 
-        AND actual_requirement = prev_actual_requirement
-        THEN 1 
-    END) as pkg_releases_new_version_same_requirement_same_spec,
-    COUNT(CASE 
-        WHEN is_exposed = false 
-        AND prev_is_exposed = true 
-        AND from_version != prev_from_version 
-        AND actual_requirement != prev_actual_requirement
-        AND current_spec_type = prev_spec_type
-        THEN 1 
-    END) as pkg_releases_new_version_changed_requirement_same_spec,
-    COUNT(CASE 
-        WHEN is_exposed = false 
-        AND prev_is_exposed = true 
-        AND from_version != prev_from_version 
-        AND actual_requirement != prev_actual_requirement
-        AND current_spec_type != prev_spec_type
-        THEN 1 
-    END) as pkg_releases_new_version_changed_requirement_changed_spec,
-    STRING_AGG(DISTINCT CASE 
-        WHEN is_exposed = false 
-        AND prev_is_exposed = true 
-        AND from_version != prev_from_version 
-        AND current_spec_type != prev_spec_type
-        THEN prev_spec_type || ' -> ' || current_spec_type 
-    END, ', ')
-FROM version_transitions
-WHERE prev_is_exposed IS NOT NULL;
-
---  dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                                                                                                                    string_agg                                                                                                                                                                                                                                                                                                                                                                                                                                                    
--- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---                        49 |                                                   0 |                                                  19275 |                                                      4103 | floating - major - restrictive -> floating - major, floating - major - restrictive -> floating - minor, floating - major - restrictive -> floating - patch, floating - major - restrictive -> other, floating - major -> floating - major - restrictive, floating - major -> other, floating - minor -> floating - major, floating - minor -> floating - major - restrictive, floating - minor -> floating - patch, floating - minor -> other, floating - minor -> pinned, floating - patch -> floating - major, floating - patch -> floating - major - restrictive, floating - patch -> floating - minor, floating - patch -> other, floating - patch -> pinned, other -> floating - major, other -> floating - major - restrictive, other -> floating - minor, other -> floating - patch, other -> pinned, pinned -> floating - major, pinned -> floating - minor, pinned -> floating - patch, pinned -> other
+--  dep_releases_new_version | pkg_releases_new_version_same_requirement_same_spec | pkg_releases_new_version_changed_requirement_same_spec | pkg_releases_new_version_changed_requirement_changed_spec |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+-- --------------------------+-----------------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+--                        51 |                                                   0 |                                                  19549 |                                                      3829 | at-most -> complex-expression, at-most -> fixed-ranging, at-most -> floating-major, at-most -> floating-minor, at-most -> floating-patch, at-most -> not-expression, at-most -> pinning, complex-expression -> at-most, complex-expression -> fixed-ranging, complex-expression -> floating-major, complex-expression -> floating-minor, complex-expression -> floating-patch, complex-expression -> pinning, fixed-ranging -> at-most, fixed-ranging -> complex-expression, fixed-ranging -> floating-major, fixed-ranging -> floating-minor, fixed-ranging -> floating-patch, fixed-ranging -> pinning, floating-minor -> at-most, floating-minor -> complex-expression, floating-minor -> fixed-ranging, floating-minor -> floating-major, floating-minor -> floating-patch, floating-minor -> or-expression, floating-minor -> pinning, floating-patch -> at-most, floating-patch -> complex-expression, floating-patch -> fixed-ranging, floating-patch -> floating-major, floating-patch -> floating-minor, floating-patch -> or-expression, floating-patch -> pinning, or-expression -> floating-minor, pinning -> at-most, pinning -> complex-expression, pinning -> fixed-ranging, pinning -> floating-major, pinning -> floating-minor, pinning -> floating-patch
 -- (1 row)
 
 
--- vulnerable -> nonvulnerable, trending constraint type change
-WITH version_transitions AS (
-    SELECT 
-        system_name,
-        from_package_name,
-        to_package_name,
-        from_version,
-        actual_requirement,
-        to_version,
-        interval_start,
-        is_exposed,
-        LAG(is_exposed) OVER w as prev_is_exposed,
-        LAG(from_version) OVER w as prev_from_version,
-        LAG(to_version) OVER w as prev_to_version,
-        LAG(actual_requirement) OVER w as prev_actual_requirement,
-        requirement_type as current_spec_type,
-        LAG(requirement_type) OVER w as prev_spec_type
-    FROM relations_minified
-    WHERE is_regular = true
-        AND actual_requirement IS NOT NULL
-    WINDOW w AS (
-        PARTITION BY system_name, from_package_name, to_package_name 
-        ORDER BY interval_start
-    )
-)
+
+-- Query 8: Vulnerable -> Safe (trending transitions)
 SELECT 
-    prev_spec_type || ' -> ' || current_spec_type as spec_type_transition,
+    spec_transition,
     COUNT(*) as transition_count
-FROM version_transitions
+FROM mv_all_version_transitions
 WHERE 
-    is_exposed = false 
-    AND prev_is_exposed = true 
-    AND from_version != prev_from_version 
-    AND actual_requirement != prev_actual_requirement
-    AND current_spec_type != prev_spec_type
-GROUP BY 
-    prev_spec_type, current_spec_type
-ORDER BY 
-    transition_count DESC;
+    vulnerability_transition = 'vulnerable_to_safe'
+    AND change_type = 'pkg_new_version_changed_req_changed_spec'
+    AND spec_transition IS NOT NULL
+GROUP BY spec_transition
+ORDER BY transition_count DESC;
 
+--            spec_transition            | transition_count 
+-- --------------------------------------+------------------
+--  pinning -> floating-minor            |             1154
+--  pinning -> floating-major            |              694
+--  pinning -> fixed-ranging             |              342
+--  fixed-ranging -> floating-major      |              331
+--  floating-minor -> pinning            |              279
+--  floating-patch -> floating-minor     |              229
+--  pinning -> floating-patch            |              179
+--  floating-patch -> floating-major     |               88
+--  floating-patch -> pinning            |               87
+--  floating-minor -> floating-major     |               62
+--  fixed-ranging -> pinning             |               49
+--  floating-patch -> fixed-ranging      |               46
+--  at-most -> floating-major            |               46
+--  pinning -> at-most                   |               38
+--  fixed-ranging -> floating-patch      |               30
+--  floating-minor -> floating-patch     |               27
+--  at-most -> fixed-ranging             |               25
+--  fixed-ranging -> complex-expression  |               20
+--  fixed-ranging -> at-most             |               17
+--  at-most -> pinning                   |               11
+--  floating-minor -> or-expression      |                7
+--  floating-minor -> fixed-ranging      |                7
+--  at-most -> floating-patch            |                6
+--  pinning -> complex-expression        |                6
+--  complex-expression -> floating-major |                6
+--  complex-expression -> fixed-ranging  |                6
+--  floating-patch -> at-most            |                5
+--  complex-expression -> floating-patch |                5
+--  at-most -> complex-expression        |                4
+--  floating-patch -> complex-expression |                4
+--  floating-minor -> complex-expression |                3
+--  fixed-ranging -> floating-minor      |                3
+--  at-most -> not-expression            |                3
+--  at-most -> floating-minor            |                3
+--  or-expression -> floating-minor      |                2
+--  complex-expression -> at-most        |                1
+--  complex-expression -> pinning        |                1
+--  complex-expression -> floating-minor |                1
+--  floating-patch -> or-expression      |                1
+--  floating-minor -> at-most            |                1
+-- (40 rows)
 
---                 spec_type_transition                | transition_count 
--- ----------------------------------------------------+------------------
---  pinned -> floating - minor                         |             1140
---  other -> floating - major                          |              845
---  other -> floating - minor                          |              359
---  floating - patch -> floating - minor               |              307
---  floating - minor -> pinned                         |              277
---  other -> floating - patch                          |              202
---  floating - minor -> floating - major               |              163
---  floating - patch -> floating - major               |              162
---  floating - patch -> other                          |              148
---  floating - minor -> floating - major - restrictive |              110
---  pinned -> floating - patch                         |               69
---  floating - patch -> pinned                         |               66
---  other -> floating - major - restrictive            |               49
---  floating - minor -> floating - patch               |               46
---  floating - major - restrictive -> floating - major |               35
---  floating - minor -> other                          |               34
---  pinned -> floating - major                         |               30
---  floating - major - restrictive -> floating - minor |               21
---  floating - patch -> floating - major - restrictive |               12
---  other -> pinned                                    |                8
---  floating - major - restrictive -> other            |                7
---  pinned -> other                                    |                5
---  floating - major - restrictive -> floating - patch |                4
---  floating - major -> other                          |                3
---  floating - major -> floating - major - restrictive |                1
--- (25 rows)
