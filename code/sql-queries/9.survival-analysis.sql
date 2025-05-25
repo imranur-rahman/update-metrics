@@ -1,3 +1,4 @@
+-- test if the libraries table contains the top 1000 packages from each system
 SELECT COUNT(*)
 FROM (
     SELECT system_name, package_name
@@ -10,6 +11,7 @@ FROM (
     WHERE rn <= 1000
 ) ranked;
 -- reutrned 3000
+
 
 -- Create a new table with top 1000 projects from each system and their relations
 CREATE TABLE relations_minified_versioning AS
@@ -31,30 +33,6 @@ INNER JOIN top_packages t
 WHERE r.is_regular = true
     AND r.actual_requirement IS NOT NULL;
 -- SELECT 1559743
-
--- Adding a new column to the relations_minified_versioning table
--- to store the constraint type
-ALTER TABLE relations_minified_versioning
-ADD COLUMN requirement_type VARCHAR(50);
-
--- probably don't need this since relations_minified already has the column
--- UPDATE relations_minified_versioning
--- SET requirement_type = CASE
---     -- WHEN actual_requirement IS NULL THEN 'null' -- this is case won't occur
---     WHEN get_spec_type(actual_requirement) = 'pinned' THEN 'pinned'
---     WHEN get_spec_type(actual_requirement) = 'floating - major' THEN 'floating - major'
---     WHEN get_spec_type(actual_requirement) = 'floating - major - restrictive' THEN 'floating - major - restrictive'
---     WHEN get_spec_type(actual_requirement) = 'floating - minor' THEN 'floating - minor'
---     WHEN get_spec_type(actual_requirement) = 'floating - patch' THEN 'floating - patch'
---     ELSE 'other'
--- END;
--- UPDATE 1559743
-
--- not needed anymore
--- UPDATE relations_minified_versioning
--- SET requirement_type = 'NULL'
--- WHERE actual_requirement IS NULL;
--- -- UPDATE 91321
 
 
 -- Convert the interval start time and interval end time to zero based indexing for each package dependency relationship
@@ -108,3 +86,5 @@ WHERE r.system_name = d.system_name
     AND r.from_package_name = d.from_package_name
     AND r.to_package_name = d.to_package_name;
 -- UPDATE 1559743
+
+-- then export the relations_minified_versioning table to a csv file for survival analysis

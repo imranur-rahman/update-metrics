@@ -72,7 +72,7 @@ ORDER BY system_name;
 
 
 
-
+-- updated RQ1 results
 WITH categorized_requirements AS (
     SELECT 
         system_name,
@@ -92,7 +92,6 @@ SELECT
     system_name,
     requirement_type,
     COUNT(*) as total_count,
-    -- Use CONCAT_WS for better readability and performance
     COUNT(DISTINCT CONCAT_WS('|', system_name, from_package_name, from_version, to_package_name)) as unique_pkg_pkgver_dep_count,
     COUNT(DISTINCT CONCAT_WS('|', system_name, from_package_name, to_package_name)) as unique_pkg_dep_count,
     COUNT(DISTINCT CONCAT_WS('|', system_name, from_package_name)) as unique_pkg_count
@@ -102,27 +101,35 @@ GROUP BY
     system_name, requirement_type
 ORDER BY
     system_name, requirement_type;
--- system_name |        requirement_type        | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count 
--- -------------+--------------------------------+-------------+-----------------------------+----------------------+------------------
---  CARGO       | floating - major               |         200 |                         106 |                   17 |               17
---  CARGO       | floating - major - restrictive |         150 |                          98 |                    8 |                8
---  CARGO       | floating - minor               |      188983 |                       99970 |                 6678 |             3271
---  CARGO       | floating - patch               |        2675 |                        1335 |                  239 |              158
---  CARGO       | other                          |        5468 |                        3182 |                  234 |              177
---  CARGO       | pinned                         |         227 |                         126 |                   18 |               17
---  NPM         | floating - major               |     1776125 |                      389961 |                18116 |             9901
---  NPM         | floating - major - restrictive |        4626 |                        1944 |                  179 |              137
---  NPM         | floating - minor               |    52652254 |                    34148964 |               614394 |           105755
---  NPM         | floating - patch               |     1833562 |                     1094988 |                27358 |             8701
---  NPM         | other                          |      146373 |                       84392 |                 4711 |             2772
---  NPM         | pinned                         |    22560270 |                    15380765 |               180979 |            41262
---  PYPI        | floating - major               |     3266606 |                     1466024 |                76742 |            22218
---  PYPI        | floating - major - restrictive |      113305 |                       57039 |                 4199 |             2790
---  PYPI        | floating - minor               |     1960065 |                      920345 |                33501 |             9924
---  PYPI        | floating - patch               |      832580 |                      432192 |                22108 |             7737
---  PYPI        | other                          |     2682283 |                     1497272 |                59339 |            13492
---  PYPI        | pinned                         |        6220 |                        2868 |                  317 |              138
--- (18 rows)
+
+--  system_name |  requirement_type  | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count 
+-- -------------+--------------------+-------------+-----------------------------+----------------------+------------------
+--  CARGO       | at-most            |           2 |                           1 |                    1 |                1
+--  CARGO       | complex-expression |           6 |                           3 |                    3 |                3
+--  CARGO       | fixed-ranging      |         909 |                         535 |                  176 |              125
+--  CARGO       | floating-major     |         221 |                         113 |                   18 |               18
+--  CARGO       | floating-minor     |      188849 |                       99877 |                 6674 |             3268
+--  CARGO       | floating-patch     |        2622 |                        1302 |                  173 |              111
+--  CARGO       | pinning            |        5094 |                        2986 |                  192 |              141
+--  NPM         | at-most            |        6277 |                        3534 |                  187 |              136
+--  NPM         | complex-expression |         870 |                         626 |                   29 |               19
+--  NPM         | fixed-ranging      |      115725 |                       75018 |                 1383 |              795
+--  NPM         | floating-major     |     1803206 |                      402644 |                18757 |            10220
+--  NPM         | floating-minor     |    52556810 |                    34092953 |               614392 |           105826
+--  NPM         | floating-patch     |     1846202 |                     1100620 |                28500 |             9533
+--  NPM         | or-expression      |       86235 |                       40702 |                 1859 |             1225
+--  NPM         | pinning            |    22557885 |                    15384917 |               180851 |            41216
+--  PYPI        | at-most            |      137611 |                       74123 |                 5523 |             3291
+--  PYPI        | complex-expression |      106270 |                       49113 |                 3551 |             1773
+--  PYPI        | fixed-ranging      |     2644754 |                     1265353 |                48638 |            12823
+--  PYPI        | floating-major     |     3268177 |                     1453788 |                76232 |            22087
+--  PYPI        | floating-minor     |       10583 |                        5749 |                  487 |              249
+--  PYPI        | floating-patch     |      444148 |                      237391 |                11551 |             3375
+--  PYPI        | not-expression     |        9104 |                        3449 |                  296 |              246
+--  PYPI        | pinning            |     2240412 |                     1286540 |                47036 |             9016
+-- (23 rows)
+
+
 
 
 
