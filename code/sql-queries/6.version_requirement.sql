@@ -887,6 +887,7 @@ UPDATE relations_minified
 SET requirement_type = get_spec_type(actual_requirement)
 WHERE actual_requirement IS NOT NULL
 AND is_regular = true;
+-- UPDATE 88031972
 
 DROP INDEX IF EXISTS relations_index_4;
 CREATE INDEX relations_index_4 ON relations_minified (requirement_type);
@@ -906,6 +907,19 @@ GROUP BY
     requirement_type
 ORDER BY 
     count DESC;
+
+--   requirement_type  |  count   | percentage 
+-- --------------------+----------+------------
+--  floating-minor     | 52756242 |      59.93
+--  pinning            | 24803391 |      28.18
+--  floating-major     |  5071604 |       5.76
+--  fixed-ranging      |  2761388 |       3.14
+--  floating-patch     |  2292972 |       2.60
+--  at-most            |   143890 |       0.16
+--  complex-expression |   107146 |       0.12
+--  or-expression      |    86235 |       0.10
+--  not-expression     |     9104 |       0.01
+-- (9 rows)
 
 
 
@@ -962,17 +976,18 @@ ORDER BY
     total_days DESC;
 
 
--- requirement_type  | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |             total_days             | days_percentage 
+--   requirement_type  | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |             total_days             | days_percentage 
 -- --------------------+-------------+-----------------------------+----------------------+------------------+------------------------------------+-----------------
 --  floating-minor     |    13966739 |                     7730545 |               354678 |            87637 | 175385311.691874999999644045047490 |           60.46
---  pinning            |    13119822 |                     9688783 |               204411 |            47756 |  89341267.178090277777786463474306 |           30.80
---  floating-patch     |     1119247 |                      562438 |                30679 |            11096 |  13592199.934398148148076687992373 |            4.69
---  fixed-ranging      |      864636 |                      315277 |                26998 |            10580 |   9514432.497974537037292471142631 |            3.28
---  at-most            |       96119 |                       47142 |                 4995 |             3172 |   1489288.566956018518522062771840 |            0.51
---  complex-expression |       69986 |                       14836 |                 3014 |             2430 |    489023.193761574074072804822064 |            0.17
+--  pinning            |    13117575 |                     9687426 |               204360 |            47733 |  89310500.392418981481491993189862 |           30.79
+--  floating-patch     |     1119255 |                      562445 |                30680 |            11096 |  13592325.692407407407335987992373 |            4.69
+--  fixed-ranging      |      866900 |                      316645 |                27111 |            10659 |   9545365.392731481481735041427075 |            3.29
+--  at-most            |       96102 |                       47131 |                 4995 |             3172 |   1489122.457870370370373962771840 |            0.51
+--  floating-major     |       57769 |                        9548 |                 1963 |             1728 |    299634.096655092592587597180987 |            0.10
 --  or-expression      |       30923 |                       14117 |                  946 |              645 |    262043.914444444444436025375186 |            0.09
+--  complex-expression |       12209 |                        5282 |                 1061 |              837 |    189263.339097222222225907641077 |            0.07
 --  not-expression     |        1534 |                         276 |                  106 |              100 |      7346.784328703703702848268148 |            0.00
--- (8 rows)
+-- (9 rows)
 
 
 -- vulnerable dependencies: general overview
@@ -1030,14 +1045,15 @@ ORDER BY
 --   requirement_type  | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |            total_days            | days_percentage 
 -- --------------------+-------------+-----------------------------+----------------------+------------------+----------------------------------+-----------------
 --  floating-minor     |      377834 |                      197476 |                13907 |            11398 | 6224998.702025462963002667354452 |           44.12
---  pinning            |      415430 |                      214692 |                17387 |             9927 | 6173670.000706018518522358466645 |           43.75
---  floating-patch     |       48701 |                       18309 |                 2292 |             1647 |  879335.116655092592582027816297 |            6.23
---  fixed-ranging      |       32998 |                       15786 |                 2762 |             2141 |  700966.093900462962949718897404 |            4.97
+--  pinning            |      415409 |                      214675 |                17385 |             9926 | 6173429.745300925925929769586645 |           43.75
+--  floating-patch     |       48703 |                       18311 |                 2293 |             1647 |  879357.045787037037026527816297 |            6.23
+--  fixed-ranging      |       33019 |                       15803 |                 2765 |             2144 |  701206.349305555555542307777404 |            4.97
 --  at-most            |        6041 |                        2433 |                  470 |              427 |      114057.76657407407406752969 |            0.81
---  complex-expression |        1484 |                         292 |                   67 |               60 |   14012.553020833333332011040000 |            0.10
+--  complex-expression |        1479 |                         287 |                   63 |               56 |       13960.67704861111110971104 |            0.10
 --  or-expression      |         177 |                          62 |                   16 |               16 |        3065.95626157407407372590 |            0.02
 --  not-expression     |          10 |                           8 |                    6 |                6 |         149.02063657407407408889 |            0.00
--- (8 rows)
+--  floating-major     |           3 |                           3 |                    3 |                3 |      29.946840277777777800000000 |            0.00
+-- (9 rows)
 
 
 
