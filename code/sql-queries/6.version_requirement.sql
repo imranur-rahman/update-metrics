@@ -924,7 +924,7 @@ ORDER BY
 
 
 -- outdated dependencies: general overview
--- result to RQ1 (OLD)
+-- result to RQ1b
 -- 1. Materialize common calculations first
 WITH RECURSIVE highest AS (
     SELECT MAX(interval_start) as db_creation_date
@@ -991,7 +991,7 @@ ORDER BY
 
 
 -- vulnerable dependencies: general overview
--- result to RQ1
+-- result to RQ1b
 -- 1. Materialize common calculations first
 WITH RECURSIVE highest AS (
     SELECT MAX(interval_start) as db_creation_date

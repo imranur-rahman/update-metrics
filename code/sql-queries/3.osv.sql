@@ -175,3 +175,15 @@ ON relations_minified (actual_requirement);
 select count(*)
 from relations_minified
 where is_exposed = true;
+
+SELECT system_name, COUNT(DISTINCT vul_id) as unique_vuln_count
+FROM osv_extended
+GROUP BY system_name
+ORDER BY unique_vuln_count DESC;
+
+--  system_name | unique_vuln_count 
+-- -------------+-------------------
+--  PYPI        |              3767
+--  NPM         |              2192
+--  CARGO       |               989
+-- (3 rows)
