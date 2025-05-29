@@ -176,6 +176,16 @@ select count(*)
 from relations_minified
 where is_exposed = true;
 
+
+-- osv stats
+
+-- total number of vulnerabilities
+SELECT COUNT(DISTINCT vul_id)
+FROM osv_extended;
+-- 6929
+
+
+-- number of vulnerabilities in each ecosystem
 SELECT system_name, COUNT(DISTINCT vul_id) as unique_vuln_count
 FROM osv_extended
 GROUP BY system_name
@@ -187,3 +197,53 @@ ORDER BY unique_vuln_count DESC;
 --  NPM         |              2192
 --  CARGO       |               989
 -- (3 rows)
+
+-- number of vulnerabilities that have multiple vulnerable ranges
+SELECT COUNT(DISTINCT vul_id)
+FROM osv_extended
+WHERE vul_id IN (
+	SELECT vul_id
+	FROM osv_extended
+	GROUP BY vul_id
+	HAVING COUNT(*) > 1
+);
+-- 1610 total
+
+
+-- number of vulnerabilities that have multiple vulnerable ranges by ecosystem
+SELECT system_name, COUNT(DISTINCT vul_id) as multiple_range_vuln_count
+FROM osv_extended
+WHERE vul_id IN (
+	SELECT vul_id
+	FROM osv_extended
+	GROUP BY vul_id
+	HAVING COUNT(*) > 1
+)
+GROUP BY system_name
+ORDER BY multiple_range_vuln_count DESC;
+
+--  system_name | multiple_range_vuln_count 
+-- -------------+---------------------------
+--  PYPI        |                      1101
+--  NPM         |                       366
+--  CARGO       |                       162
+-- (3 rows)
+
+
+-- number of unique vulnerabilities that has vulnerable ranges spanning more than one major version
+SELECT COUNT(DISTINCT vul_id) 
+FROM osv_extended 
+WHERE get_semver_major(vul_introduced) != get_semver_major(vul_fixed);
+-- 4208
+
+SELECT system_name, COUNT(DISTINCT vul_id) as unique_vuln_count, COUNT(DISTINCT (system_name, package_name)) as unique_pkg_count
+FROM osv_extended 
+WHERE get_semver_major(vul_introduced) != get_semver_major(vul_fixed)
+GROUP BY system_name;
+--  system_name | unique_vuln_count | unique_pkg_count 
+-- -------------+-------------------+------------------
+--  CARGO       |               194 |               79
+--  NPM         |              1560 |             1001
+--  PYPI        |              2465 |              473
+-- (3 rows)
+-- Summing up: 4219 vul, 1553 packages
