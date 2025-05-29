@@ -990,6 +990,94 @@ ORDER BY
 -- (9 rows)
 
 
+-- Outdated dependencies: grouped by system_name
+WITH RECURSIVE highest AS (
+    SELECT MAX(interval_start) as db_creation_date
+    FROM relations_minified
+),
+-- 2. Pre-filter and index the base data
+filtered_requirements AS (
+    SELECT 
+        system_name,
+        requirement_type,
+        from_package_name,
+        from_version,
+        to_package_name,
+        interval_start,
+        interval_end,
+        (SELECT db_creation_date FROM highest) as db_creation_date
+    FROM 
+        relations_minified
+    WHERE 
+        is_regular = true
+        AND is_out_of_date = true
+        AND actual_requirement IS NOT NULL
+),
+-- 3. Pre-calculate days for each record
+days_calculated AS (
+    SELECT 
+        *,
+        EXTRACT(EPOCH FROM (COALESCE(interval_end, db_creation_date) - interval_start))/86400 as days
+    FROM filtered_requirements
+),
+-- 4. Calculate total days by system
+system_total_days AS (
+    SELECT 
+        system_name,
+        SUM(days) as system_total_days
+    FROM days_calculated
+    GROUP BY system_name
+)
+-- 5. Final aggregation with pre-calculated values grouped by system
+SELECT 
+    d.system_name,
+    d.requirement_type,
+    COUNT(*) as total_count,
+    COUNT(DISTINCT CONCAT_WS('|', d.from_package_name, d.from_version, d.to_package_name)) as unique_pkg_pkgver_dep_count,
+    COUNT(DISTINCT CONCAT_WS('|', d.from_package_name, d.to_package_name)) as unique_pkg_dep_count,
+    COUNT(DISTINCT d.from_package_name) as unique_pkg_count,
+    SUM(d.days) as total_days,
+    ROUND(100.0 * SUM(d.days) / NULLIF(s.system_total_days, 0), 2) as days_percentage_within_system
+FROM 
+    days_calculated d
+JOIN system_total_days s ON d.system_name = s.system_name
+GROUP BY 
+    d.system_name,
+    d.requirement_type,
+    s.system_total_days
+ORDER BY 
+    d.system_name,
+    SUM(d.days) DESC;
+
+--  system_name |  requirement_type  | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |             total_days             | days_percentage_within_system 
+-- -------------+--------------------+-------------+-----------------------------+----------------------+------------------+------------------------------------+-------------------------------
+--  CARGO       | floating-minor     |       47160 |                       29775 |                 3800 |             2225 |    804439.483657407407400981711425 |                         95.55
+--  CARGO       | pinning            |        2256 |                        1915 |                  170 |              131 |     22260.032013888888889099918876 |                          2.64
+--  CARGO       | floating-patch     |         899 |                         675 |                  128 |               87 |         11178.10851851851851861846 |                          1.33
+--  CARGO       | fixed-ranging      |         215 |                         127 |                   57 |               50 |          3800.80260416666666686666 |                          0.45
+--  CARGO       | at-most            |           2 |                           1 |                    1 |                1 |               209.1476041666666667 |                          0.02
+--  CARGO       | complex-expression |           3 |                           3 |                    3 |                3 |             0.85928240740740740741 |                          0.00
+--  NPM         | floating-minor     |    13916995 |                     7699703 |               350676 |            85313 | 174531466.030960648147793774489769 |                         67.74
+--  NPM         | pinning            |    11722538 |                     8936113 |               164264 |            39148 |  71600539.271053240740634284404129 |                         27.79
+--  NPM         | floating-patch     |      920299 |                      463250 |                23152 |             8321 |  11011899.184664351851790550691791 |                          4.27
+--  NPM         | or-expression      |       30923 |                       14117 |                  946 |              645 |    262043.914444444444436025375186 |                          0.10
+--  NPM         | fixed-ranging      |       19154 |                       10307 |                  627 |              421 |    204286.450648148148143252004073 |                          0.08
+--  NPM         | at-most            |        3320 |                        1986 |                  154 |              116 |         50167.75850694444444337387 |                          0.02
+--  NPM         | complex-expression |         192 |                          78 |                    8 |                8 |          4466.94894675925925889631 |                          0.00
+--  PYPI        | pinning            |     1392781 |                      749466 |                39935 |             8515 |  17687701.089351851851968608866857 |                         56.02
+--  PYPI        | fixed-ranging      |      847531 |                      306211 |                26427 |            10189 |   9337278.139479166666924922763002 |                         29.57
+--  PYPI        | floating-patch     |      198057 |                       98520 |                 7400 |             2697 |   2569248.399224537037026818840582 |                          8.14
+--  PYPI        | at-most            |       92780 |                       45144 |                 4840 |             3055 |   1438745.551759259259263888901840 |                          4.56
+--  PYPI        | floating-major     |       57769 |                        9548 |                 1963 |             1728 |    299634.096655092592587597180987 |                          0.95
+--  PYPI        | complex-expression |       12014 |                        5201 |                 1050 |              826 |    184795.530868055555559603921077 |                          0.59
+--  PYPI        | floating-minor     |        2584 |                        1067 |                  202 |              134 |     49406.177256944444449288846296 |                          0.16
+--  PYPI        | not-expression     |        1534 |                         276 |                  106 |              100 |      7346.784328703703702848268148 |                          0.02
+-- (21 rows)
+
+
+
+
+
 -- vulnerable dependencies: general overview
 -- result to RQ1b
 -- 1. Materialize common calculations first
@@ -1056,9 +1144,87 @@ ORDER BY
 -- (9 rows)
 
 
+-- Vulnerable dependencies: grouped by system_name  
+WITH RECURSIVE highest AS (
+    SELECT MAX(interval_start) as db_creation_date
+    FROM relations_minified
+),
+-- 2. Pre-filter and index the base data
+filtered_requirements AS (
+    SELECT 
+        system_name,
+        requirement_type,
+        from_package_name,
+        from_version,
+        to_package_name,
+        interval_start,
+        interval_end,
+        (SELECT db_creation_date FROM highest) as db_creation_date
+    FROM 
+        relations_minified
+    WHERE 
+        is_regular = true
+        AND is_exposed = true
+        AND actual_requirement IS NOT NULL
+),
+-- 3. Pre-calculate days for each record
+days_calculated AS (
+    SELECT 
+        *,
+        EXTRACT(EPOCH FROM (COALESCE(interval_end, db_creation_date) - interval_start))/86400 as days
+    FROM filtered_requirements
+),
+-- 4. Calculate total days by system
+system_total_days AS (
+    SELECT 
+        system_name,
+        SUM(days) as system_total_days
+    FROM days_calculated
+    GROUP BY system_name
+)
+-- 5. Final aggregation with pre-calculated values grouped by system
+SELECT 
+    d.system_name,
+    d.requirement_type,
+    COUNT(*) as total_count,
+    COUNT(DISTINCT CONCAT_WS('|', d.from_package_name, d.from_version, d.to_package_name)) as unique_pkg_pkgver_dep_count,
+    COUNT(DISTINCT CONCAT_WS('|', d.from_package_name, d.to_package_name)) as unique_pkg_dep_count,
+    COUNT(DISTINCT d.from_package_name) as unique_pkg_count,
+    SUM(d.days) as total_days,
+    ROUND(100.0 * SUM(d.days) / NULLIF(s.system_total_days, 0), 2) as days_percentage_within_system
+FROM 
+    days_calculated d
+JOIN system_total_days s ON d.system_name = s.system_name
+GROUP BY 
+    d.system_name,
+    d.requirement_type,
+    s.system_total_days
+ORDER BY 
+    d.system_name,
+    SUM(d.days) DESC;
 
-
-
+--  system_name |  requirement_type  | total_count | unique_pkg_pkgver_dep_count | unique_pkg_dep_count | unique_pkg_count |            total_days            | days_percentage_within_system 
+-- -------------+--------------------+-------------+-----------------------------+----------------------+------------------+----------------------------------+-------------------------------
+--  CARGO       | floating-minor     |         589 |                         190 |                   99 |               98 |   20469.898483796296298133351482 |                         99.09
+--  CARGO       | floating-patch     |          11 |                           3 |                    2 |                2 |             168.3374652777777778 |                          0.81
+--  CARGO       | fixed-ranging      |           2 |                           1 |                    1 |                1 |              12.4398842592592593 |                          0.06
+--  CARGO       | pinning            |           4 |                           3 |                    3 |                3 |           7.66603009259259255555 |                          0.04
+--  NPM         | floating-minor     |      377124 |                      197232 |                13791 |            11286 | 6202317.226215277777815693272970 |                         56.20
+--  NPM         | pinning            |      313980 |                      167944 |                10925 |             6937 | 4163928.579872685185180874361848 |                         37.73
+--  NPM         | floating-patch     |       35259 |                       12663 |                 1412 |             1088 |  654223.793344907407396919595927 |                          5.93
+--  NPM         | fixed-ranging      |         389 |                         180 |                   20 |               20 |    7424.426134259259259425932222 |                          0.07
+--  NPM         | at-most            |         412 |                         186 |                   10 |               10 |        5635.19576388888888842219 |                          0.05
+--  NPM         | or-expression      |         177 |                          62 |                   16 |               16 |        3065.95626157407407372590 |                          0.03
+--  NPM         | complex-expression |          11 |                           5 |                    2 |                2 |         197.80381944444444447407 |                          0.00
+--  NPM         | floating-major     |           3 |                           3 |                    3 |                3 |      29.946840277777777800000000 |                          0.00
+--  PYPI        | pinning            |      101425 |                       46728 |                 6457 |             2992 | 2009493.499398148148156339674797 |                         65.83
+--  PYPI        | fixed-ranging      |       32628 |                       15622 |                 2744 |             2123 |  693769.483287037037023581845182 |                         22.73
+--  PYPI        | floating-patch     |       13433 |                        5645 |                  879 |              558 |  224964.914976851851851808220370 |                          7.37
+--  PYPI        | at-most            |        5629 |                        2247 |                  460 |              417 |      108422.57081018518517910750 |                          3.55
+--  PYPI        | complex-expression |        1468 |                         282 |                   61 |               54 |       13762.87322916666666523697 |                          0.45
+--  PYPI        | floating-minor     |         121 |                          54 |                   17 |               14 |        2211.57732638888888884073 |                          0.07
+--  PYPI        | not-expression     |          10 |                           8 |                    6 |                6 |         149.02063657407407408889 |                          0.00
+-- (19 rows)
 
 
 

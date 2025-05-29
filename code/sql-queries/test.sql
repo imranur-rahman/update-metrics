@@ -342,3 +342,72 @@ and to_package_name = 'simple-git'
 and is_regular = true
 group by system_name, from_package_name, from_version, to_package_name, actual_requirement, to_version, to_package_highest_available_release, interval_start, interval_end, is_out_of_date, is_exposed
 order by interval_start) to '~/running_example.csv' delimiter ',' csv header
+
+
+-- Create the table to store the qualifying dependencies
+CREATE TABLE qualifying_dependencies_as_example AS
+WITH dependency_analysis AS (
+    SELECT 
+        system_name,
+        from_package_name,
+        to_package_name,
+        -- Check if there's at least one outdated dependency that is not exposed
+        BOOL_OR(is_out_of_date = true AND is_exposed = false) as has_outdated_not_exposed,
+        -- Check if there's at least one exposed dependency
+        BOOL_OR(is_exposed = true) as has_exposed,
+        -- Count distinct requirement types
+        COUNT(DISTINCT requirement_type) as requirement_type_count,
+        -- Collect all requirement types for reference
+        STRING_AGG(DISTINCT requirement_type, ', ' ORDER BY requirement_type) as requirement_types
+    FROM public.relations_minified
+    WHERE 
+        is_regular = true
+        AND actual_requirement IS NOT NULL
+        -- AND requirement_type IS NOT NULL
+    GROUP BY 
+        system_name, 
+        from_package_name, 
+        to_package_name
+    HAVING 
+        -- At least one row with is_out_of_date = true AND is_exposed = false
+        BOOL_OR(is_out_of_date = true AND is_exposed = false) = true
+        -- At least one row with is_exposed = true
+        AND BOOL_OR(is_exposed = true) = true
+        -- At least two different requirement types
+        AND COUNT(DISTINCT requirement_type) >= 2
+)
+SELECT 
+    system_name,
+    from_package_name,
+    to_package_name,
+    requirement_type_count,
+    requirement_types
+FROM dependency_analysis
+ORDER BY 
+    system_name, 
+    from_package_name, 
+    to_package_name;
+-- SELECT 8949
+
+-- sample data with these qualifying dependencies
+SELECT *
+FROM qualifying_dependencies_as_example
+ORDER BY requirement_type_count DESC;
+
+select system_name, from_package_name, from_version, to_package_name, actual_requirement, requirement_type, to_version, to_package_highest_available_release, interval_start, interval_end, is_out_of_date, is_exposed
+from public.relations_minified
+where system_name = 'NPM'
+and from_package_name = 'hexo'
+and to_package_name = 'moment'
+and is_regular = true
+group by system_name, from_package_name, from_version, to_package_name, actual_requirement, requirement_type, to_version, to_package_highest_available_release, interval_start, interval_end, is_out_of_date, is_exposed
+order by interval_start;
+
+\copy (select system_name, from_package_name, from_version, to_package_name, actual_requirement, requirement_type, to_version, to_package_highest_available_release, interval_start, interval_end, is_out_of_date, is_exposed
+from public.relations_minified
+where system_name = 'NPM'
+and from_package_name = 'hexo'
+and to_package_name = 'moment'
+and is_regular = true
+group by system_name, from_package_name, from_version, to_package_name, actual_requirement, requirement_type, to_version, to_package_highest_available_release, interval_start, interval_end, is_out_of_date, is_exposed
+order by interval_start) to '~/security-metrics/data/running_example.csv' delimiter ',' csv header
