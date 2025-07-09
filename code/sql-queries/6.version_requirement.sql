@@ -1308,6 +1308,8 @@ CREATE INDEX idx_mv_transitions_spec ON mv_all_version_transitions(spec_transiti
 
 
 
+
+
 -- Query 1: Updated -> Outdated (4 ways)
 SELECT 
     COUNT(*) FILTER (WHERE change_type = 'dep_new_version') as dep_releases_new_version,
@@ -1608,3 +1610,57 @@ ORDER BY transition_count DESC;
 --  floating-minor -> at-most            |                1
 -- (40 rows)
 
+
+
+
+
+-- Can we get the number of time transitions happened for each system_name, from_package_name?
+
+-- count all transitions
+SELECT 
+    system_name,
+    from_package_name,
+    COUNT(*) as total_transitions
+FROM mv_all_version_transitions
+WHERE change_type IS NOT NULL  -- Only count actual transitions
+GROUP BY system_name, from_package_name
+ORDER BY total_transitions DESC, system_name, from_package_name;
+
+
+-- count specific transitions
+SELECT 
+    system_name,
+    from_package_name,
+    COUNT(*) FILTER (WHERE spec_transition IS NOT NULL) as spec_change_count,
+    COUNT(*) as total_transitions
+FROM mv_all_version_transitions
+WHERE spec_transition IS NOT NULL
+GROUP BY system_name, from_package_name
+ORDER BY total_transitions DESC, system_name, from_package_name;
+
+
+-- summary by system
+SELECT 
+    system_name,
+    COUNT(DISTINCT from_package_name) as unique_packages,
+    COUNT(*) as total_transitions,
+    AVG(spec_change_count) as avg_transitions_per_package,
+    MAX(spec_change_count) as max_transitions_per_package,
+    MIN(spec_change_count) as min_transitions_per_package
+FROM (
+    SELECT 
+        system_name,
+        from_package_name,
+        COUNT(*) FILTER (WHERE spec_transition IS NOT NULL) as spec_change_count
+    FROM mv_all_version_transitions
+    WHERE spec_transition IS NOT NULL
+    GROUP BY system_name, from_package_name
+) pkg_transitions
+GROUP BY system_name
+ORDER BY system_name;
+
+--  system_name | unique_packages | total_transitions | avg_transitions_per_package | max_transitions_per_package | min_transitions_per_package 
+-- -------------+-----------------+-------------------+-----------------------------+-----------------------------+-----------------------------
+--  CARGO       |             260 |               260 |          2.2000000000000000 |                          18 |                           1
+--  NPM         |           33708 |             33708 |          4.3251750326332028 |                         358 |                           1
+--  PYPI        |           11100 |             11100 |          4.3978378378378378 |                         374 |                           1
