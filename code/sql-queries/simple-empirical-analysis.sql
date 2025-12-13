@@ -105,3 +105,45 @@ GROUP BY ttt.system_name;
 --  CARGO       |  15321
 --  NPM         | 141551
 --  PYPI        |  44199
+
+
+
+
+
+
+-- number of packages appearing in relations_minified (either as from or to)
+SELECT system_name, COUNT(DISTINCT pkg) AS num_packages_in_relations
+FROM (
+	SELECT system_name, from_package_name AS pkg FROM relations_minified
+	UNION
+	SELECT system_name, to_package_name   AS pkg FROM relations_minified
+) t
+GROUP BY system_name;
+--  system_name | num_packages_in_relations 
+-- -------------+---------------------------
+--  CARGO       |                     15690
+--  NPM         |                    146651
+--  PYPI        |                     48608
+-- (3 rows)
+
+-- number of dependency relations (rows) in relations_minified
+SELECT system_name, COUNT(*) AS num_dependency_relations
+FROM relations_minified
+GROUP BY system_name;
+--  system_name | num_dependency_relations 
+-- -------------+--------------------------
+--  CARGO       |                  8070357
+--  NPM         |                245307373
+--  PYPI        |                 20859740
+-- (3 rows)
+
+-- number of unique package-to-package dependency edges (ignore versions)
+SELECT system_name, COUNT(DISTINCT (from_package_name, to_package_name)) AS num_unique_pkg_edges
+FROM relations_minified
+GROUP BY system_name;
+--  system_name | num_unique_pkg_edges 
+-- -------------+----------------------
+--  CARGO       |               158849
+--  NPM         |              2221947
+--  PYPI        |               360969
+-- (3 rows)

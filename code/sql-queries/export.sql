@@ -48,3 +48,13 @@ COPY relations_minified_versioning TO
 '/home/imranur/security-metrics/data/relationships/relations_minified_versioning.csv' DELIMITER ',' CSV HEADER;
 
 `\copy (select dependency_id, dependency_key, interval_start_days, interval_end_days, requirement_type, is_out_of_date, is_exposed from relations_minified_versioning) to '/home/imranur/security-metrics/data/relationships/relations_minified_versioning.csv' with header delimiter as ','` (count: COPY 1559743)
+
+
+\copy (
+  SELECT system_name, 
+         package_name, 
+         COUNT(vul_id) AS vulnerability_count
+  FROM public.osv_extended
+  GROUP BY system_name, package_name
+  ORDER BY system_name, package_name
+) to '/home/imranur/security-metrics/data/vul_count_per_pkg.csv' with header delimiter as ',' (count: 2440)

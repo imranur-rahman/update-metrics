@@ -247,3 +247,23 @@ GROUP BY system_name;
 --  PYPI        |              2465 |              473
 -- (3 rows)
 -- Summing up: 4219 vul, 1553 packages
+
+-- number of unique packages that have vulnerabilities
+SELECT COUNT(DISTINCT (system_name, package_name)) as unique_pkg_with_vuln_count
+FROM osv_extended;
+--  unique_pkg_with_vuln_count 
+-- ----------------------------
+--                        2440
+-- (1 row)
+
+-- breakdown by ecosystem
+SELECT system_name, COUNT(DISTINCT package_name) as unique_pkg_with_vuln_count
+FROM osv_extended
+GROUP BY system_name
+ORDER BY unique_pkg_with_vuln_count DESC;
+--  system_name | unique_pkg_with_vuln_count 
+-- -------------+----------------------------
+--  NPM         |                       1363
+--  PYPI        |                        694
+--  CARGO       |                        383
+-- (3 rows)
