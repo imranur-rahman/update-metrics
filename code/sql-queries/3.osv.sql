@@ -3,20 +3,22 @@
 -- For the post-fix exposure time
 -- 1. convert osv columns to semver
 
--- rows at this point: 14721
+-- rows at this point: 21679
 
 
 
 -- 2. find the fixed version release date and add it to the table.
 create table osv_extended as
-select o.vul_id, o.system_name, o.package_name, o.vul_introduced, o.vul_fixed, v.release_date as fixed_version_release_date
+select o.vul_id, o.system_name, o.package_name, o.vul_introduced, o.vul_fixed, 
+       o.severity,
+       v.release_date as fixed_version_release_date
 from osv o
 inner join versioninfo v
 on o.system_name = v.system_name and o.package_name = v.package_name and o.vul_fixed = v.version_name;
--- total rows: 11368
+-- total rows: 11867
 
 -- select count(*) from osv_extended;
--- rows in osv_extended: 11368
+-- rows in osv_extended: 11867
 
 
 -- change the data type of 'vul_introduced' and 'vul_fixed' column
@@ -30,15 +32,23 @@ alter table osv_extended alter column vul_fixed type semver using
 
 -- now delete it.
 -- use with caution.
+-- delete rows where any critical column is null (except severity column)
 delete from osv_extended
-where not (osv_extended is not null);
--- 424 rows deleted
--- total rows: 10944
+where vul_id IS NULL 
+   OR system_name IS NULL 
+   OR package_name IS NULL 
+   OR vul_introduced IS NULL 
+   OR vul_fixed IS NULL 
+   OR fixed_version_release_date IS NULL;
+-- rows deleted will vary based on data
+-- severity can be null
+-- rows deleted: 567
 
 
 -- indexing for faster data retrieval
 CREATE INDEX osv_extended_index
-ON osv_extended (system_name, package_name, vul_introduced, vul_fixed, fixed_version_release_date);
+ON osv_extended (system_name, package_name, vul_introduced, vul_fixed, fixed_version_release_date, severity);
+
 
 -- drop index osv_extended_index;
 
@@ -107,8 +117,12 @@ ON relations_minified (system_name,
 
 -- alter table relations drop column is_exposed;
 alter table relations_minified add column is_exposed boolean default false;
+alter table relations_minified add column is_exposed_critical boolean default false;
+alter table relations_minified add column is_exposed_high boolean default false;
+alter table relations_minified add column is_exposed_moderate boolean default false;
+alter table relations_minified add column is_exposed_low boolean default false;
 
--- Update the rows for is_exposed = true
+-- Update the rows for is_exposed = true (any severity)
 UPDATE relations_minified r
 SET is_exposed = true
 FROM osv_extended o
@@ -117,7 +131,50 @@ WHERE r.system_name = o.system_name
 	AND o.fixed_version_release_date <= r.interval_start
 	AND o.vul_introduced <= r.to_version
 	AND r.to_version < o.vul_fixed;
--- updated rows: 2315112
+
+-- Update the rows for is_exposed_critical = true
+UPDATE relations_minified r
+SET is_exposed_critical = true
+FROM osv_extended o
+WHERE r.system_name = o.system_name
+	AND r.to_package_name = o.package_name
+	AND o.fixed_version_release_date <= r.interval_start
+	AND o.vul_introduced <= r.to_version
+	AND r.to_version < o.vul_fixed
+	AND o.severity = 'CRITICAL';
+
+-- Update the rows for is_exposed_high = true
+UPDATE relations_minified r
+SET is_exposed_high = true
+FROM osv_extended o
+WHERE r.system_name = o.system_name
+	AND r.to_package_name = o.package_name
+	AND o.fixed_version_release_date <= r.interval_start
+	AND o.vul_introduced <= r.to_version
+	AND r.to_version < o.vul_fixed
+	AND o.severity = 'HIGH';
+
+-- Update the rows for is_exposed_moderate = true
+UPDATE relations_minified r
+SET is_exposed_moderate = true
+FROM osv_extended o
+WHERE r.system_name = o.system_name
+	AND r.to_package_name = o.package_name
+	AND o.fixed_version_release_date <= r.interval_start
+	AND o.vul_introduced <= r.to_version
+	AND r.to_version < o.vul_fixed
+	AND o.severity = 'MODERATE';
+
+-- Update the rows for is_exposed_low = true
+UPDATE relations_minified r
+SET is_exposed_low = true
+FROM osv_extended o
+WHERE r.system_name = o.system_name
+	AND r.to_package_name = o.package_name
+	AND o.fixed_version_release_date <= r.interval_start
+	AND o.vul_introduced <= r.to_version
+	AND r.to_version < o.vul_fixed
+	AND o.severity = 'LOW';
 
 CREATE INDEX relations_minified_index_2
 ON relations_minified (system_name,
@@ -125,7 +182,11 @@ ON relations_minified (system_name,
 				to_package_name,
 				is_out_of_date,
 				is_regular,
-				is_exposed);
+				is_exposed,
+				is_exposed_critical,
+				is_exposed_high,
+				is_exposed_moderate,
+				is_exposed_low);
 
 CREATE INDEX relations_minified_index_3
 ON relations_minified (actual_requirement);
@@ -176,6 +237,14 @@ select count(*)
 from relations_minified
 where is_exposed = true;
 
+select 
+	COUNT(*) FILTER (WHERE is_exposed = true) as exposed_any,
+	COUNT(*) FILTER (WHERE is_exposed_critical = true) as exposed_critical,
+	COUNT(*) FILTER (WHERE is_exposed_high = true) as exposed_high,
+	COUNT(*) FILTER (WHERE is_exposed_moderate = true) as exposed_moderate,
+	COUNT(*) FILTER (WHERE is_exposed_low = true) as exposed_low
+from relations_minified;
+
 
 -- osv stats
 
@@ -197,6 +266,45 @@ ORDER BY unique_vuln_count DESC;
 --  NPM         |              2192
 --  CARGO       |               989
 -- (3 rows)
+
+
+
+-- severity distribution
+SELECT severity, COUNT(DISTINCT vul_id) as vuln_count
+FROM osv_extended
+WHERE severity IS NOT NULL
+GROUP BY severity
+ORDER BY vuln_count DESC;
+--  severity | vuln_count 
+-- ----------+------------
+--  HIGH     |       2008
+--  MODERATE |       1947
+--  CRITICAL |        776
+--  LOW      |        277
+-- (4 rows)
+
+
+-- severity distribution summary by ecosystem
+SELECT system_name, severity, COUNT(*) as count
+FROM osv_extended
+WHERE severity IS NOT NULL
+GROUP BY system_name, severity
+ORDER BY system_name, count DESC;
+-- system_name | severity | count 
+-- -------------+----------+-------
+--  CARGO       | MODERATE |   345
+--  CARGO       | HIGH     |   293
+--  CARGO       | CRITICAL |   117
+--  CARGO       | LOW      |    80
+--  NPM         | HIGH     |  1264
+--  NPM         | MODERATE |  1081
+--  NPM         | CRITICAL |   451
+--  NPM         | LOW      |   166
+--  PYPI        | MODERATE |  2172
+--  PYPI        | HIGH     |  1599
+--  PYPI        | CRITICAL |   390
+--  PYPI        | LOW      |   175
+-- (12 rows)
 
 -- number of vulnerabilities that have multiple vulnerable ranges
 SELECT COUNT(DISTINCT vul_id)
