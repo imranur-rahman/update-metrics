@@ -115,7 +115,7 @@ ON relations_minified (system_name,
 				to_version,
 				interval_start);
 
--- alter table relations drop column is_exposed;
+-- alter table relations_minified drop column is_exposed cascade; -- since mv_all_version_transitions were dependending on is_exposed column
 alter table relations_minified add column is_exposed boolean default false;
 alter table relations_minified add column is_exposed_critical boolean default false;
 alter table relations_minified add column is_exposed_high boolean default false;
@@ -142,6 +142,7 @@ WHERE r.system_name = o.system_name
 	AND o.vul_introduced <= r.to_version
 	AND r.to_version < o.vul_fixed
 	AND o.severity = 'CRITICAL';
+-- UPDATE 220892
 
 -- Update the rows for is_exposed_high = true
 UPDATE relations_minified r
@@ -153,6 +154,7 @@ WHERE r.system_name = o.system_name
 	AND o.vul_introduced <= r.to_version
 	AND r.to_version < o.vul_fixed
 	AND o.severity = 'HIGH';
+-- UPDATE 880094
 
 -- Update the rows for is_exposed_moderate = true
 UPDATE relations_minified r
@@ -164,6 +166,7 @@ WHERE r.system_name = o.system_name
 	AND o.vul_introduced <= r.to_version
 	AND r.to_version < o.vul_fixed
 	AND o.severity = 'MODERATE';
+-- UPDATE 1474545
 
 -- Update the rows for is_exposed_low = true
 UPDATE relations_minified r
@@ -175,6 +178,7 @@ WHERE r.system_name = o.system_name
 	AND o.vul_introduced <= r.to_version
 	AND r.to_version < o.vul_fixed
 	AND o.severity = 'LOW';
+-- UPDATE 763060
 
 CREATE INDEX relations_minified_index_2
 ON relations_minified (system_name,
