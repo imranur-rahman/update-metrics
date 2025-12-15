@@ -131,6 +131,7 @@ WHERE r.system_name = o.system_name
 	AND o.fixed_version_release_date <= r.interval_start
 	AND o.vul_introduced <= r.to_version
 	AND r.to_version < o.vul_fixed;
+-- UPDATE 2945335
 
 -- Update the rows for is_exposed_critical = true
 UPDATE relations_minified r
